@@ -1,0 +1,122 @@
+// LightSwitch Standalone - resource script.
+//
+// IMPORTANT: this file carries geometry and control ids only. All user-visible
+// text is filled in at runtime from the L10n table (see src/L10n.cpp), so the
+// English wording in the trailing comments is documentation, not a resource.
+//
+// Two reasons for keeping the strings out of the .rc:
+//   * one source of truth per string, instead of one per language per resource;
+//   * the resource compiler's code page handling for non-ASCII is a classic
+//     source of mojibake, while .cpp files are compiled with /utf-8.
+//
+// The button row is laid out at runtime (LayoutButtonRow in SettingsDialog.cpp)
+// because translated labels have different widths - the previous hand-placed row
+// had "Restore defaults" overlapping "Save". The coordinates below are just the
+// English starting point and are replaced on WM_INITDIALOG.
+#include <windows.h>
+#include "resource.h"
+
+/////////////////////////////////////////////////////////////////////////////
+// Application manifest
+//
+// The project sets GenerateManifest=false, so this resource is the only
+// manifest in the image. That avoids having to fight mt.exe over merging two
+// manifests that both declare an assemblyIdentity.
+
+1 RT_MANIFEST "app.manifest"
+
+/////////////////////////////////////////////////////////////////////////////
+// Settings dialog
+
+IDD_SETTINGS DIALOGEX 0, 0, 340, 361
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    // ---- Schedule / 时间计划 ---------------------------------------------
+    GROUPBOX        "", IDC_STATIC_GROUP_SCHEDULE, 7, 5, 326, 76
+    LTEXT           "", IDC_STATIC_LBL_MODE, 14, 21, 34, 9          // Mode:
+    COMBOBOX        IDC_CMB_MODE, 52, 19, 130, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    // Label boxes are sized for the WIDER of the two languages. A full-width
+    // CJK glyph is roughly one em wide, so "浅色主题开始时间：" (9 glyphs) needs
+    // more room than "Light theme starts at:" even though it looks shorter.
+    LTEXT           "", IDC_STATIC_LBL_LIGHT, 14, 41, 84, 9         // Light theme starts at:
+    CONTROL         "", IDC_DTP_LIGHT, "SysDateTimePick32", DTS_TIMEFORMAT | WS_TABSTOP, 102, 39, 62, 13
+    LTEXT           "", IDC_STATIC_LBL_DARK, 180, 41, 84, 9         // Dark theme starts at:
+    CONTROL         "", IDC_DTP_DARK, "SysDateTimePick32", DTS_TIMEFORMAT | WS_TABSTOP, 268, 39, 62, 13
+    LTEXT           "", IDC_STATIC_SUN, 14, 58, 314, 18             // live status line
+
+    // ---- Apply to / 生效范围 ---------------------------------------------
+    GROUPBOX        "", IDC_STATIC_GROUP_APPLY, 7, 86, 326, 42
+    CONTROL         "", IDC_CHK_SYSTEM, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 100, 170, 10
+    CONTROL         "", IDC_CHK_APPS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 114, 170, 10
+    LTEXT           "", IDC_STATIC_CURRENT, 192, 99, 141, 26        // live status line
+
+    // ---- Sunrise / sunset / 日出日落 --------------------------------------
+    GROUPBOX        "", IDC_STATIC_GROUP_SUN, 7, 133, 326, 70
+    LTEXT           "", IDC_STATIC_LBL_LAT, 14, 150, 30, 9          // Latitude:
+    EDITTEXT        IDC_EDT_LAT, 46, 148, 66, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_STATIC_LBL_LON, 118, 150, 40, 9         // Longitude:
+    EDITTEXT        IDC_EDT_LON, 160, 148, 66, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_STATIC_LBL_SUNRISE_OFF, 14, 168, 86, 9  // Sunrise offset (min):
+    EDITTEXT        IDC_EDT_SUNRISE_OFF, 104, 166, 44, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "", IDC_STATIC_LBL_SUNSET_OFF, 156, 168, 86, 9  // Sunset offset (min):
+    EDITTEXT        IDC_EDT_SUNSET_OFF, 246, 166, 44, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "", IDC_STATIC_HINT_OFFSETS, 14, 184, 314, 16   // offsets hint
+
+    // ---- Shortcut / 快捷键 -----------------------------------------------
+    GROUPBOX        "", IDC_STATIC_GROUP_SHORTCUT, 7, 208, 326, 44
+    CONTROL         "", IDC_CHK_WIN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 223, 74, 10
+    CONTROL         "", IDC_HOTKEY, "msctls_hotkey32", WS_BORDER | WS_TABSTOP, 96, 221, 92, 14
+    LTEXT           "", IDC_STATIC_HINT_HOTKEY, 194, 220, 138, 26  // Win-key hint
+
+    // ---- Startup / 开机启动 ----------------------------------------------
+    GROUPBOX        "", IDC_STATIC_GROUP_STARTUP, 7, 257, 326, 39
+    CONTROL         "", IDC_CHK_STARTUP, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 268, 200, 10
+    LTEXT           "", IDC_STATIC_STARTUP, 16, 281, 314, 10        // live status line
+
+    // ---- Interface language / 界面语言 ------------------------------------
+    GROUPBOX        "", IDC_STATIC_GROUP_LANGUAGE, 7, 301, 326, 32
+    LTEXT           "", IDC_STATIC_LBL_LANGUAGE, 14, 312, 42, 9     // Language:
+    COMBOBOX        IDC_CMB_LANG, 60, 310, 220, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    // ---- Button row (re-laid out at runtime) ------------------------------
+    PUSHBUTTON      "", IDC_BTN_TOGGLE, 7, 340, 50, 14
+    PUSHBUTTON      "", IDC_BTN_RESTART_EXPLORER, 62, 340, 78, 14
+    PUSHBUTTON      "", IDC_BTN_OPEN_FOLDER, 145, 340, 56, 14
+    PUSHBUTTON      "", IDC_BTN_RESET, 206, 340, 78, 14
+    DEFPUSHBUTTON   "", IDOK, 285, 340, 22, 14
+    PUSHBUTTON      "", IDCANCEL, 311, 340, 21, 14
+END
+
+/////////////////////////////////////////////////////////////////////////////
+// Version information
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,1,0,0
+ PRODUCTVERSION 1,1,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "LightSwitch Standalone contributors\0"
+            VALUE "FileDescription", "Light Switch Standalone\0"
+            VALUE "FileVersion", "1.1.0.0\0"
+            VALUE "InternalName", "LightSwitchStandalone\0"
+            VALUE "LegalCopyright", "Portions Copyright (c) Microsoft Corporation (MIT).\0"
+            VALUE "OriginalFilename", "LightSwitchStandalone.exe\0"
+            VALUE "ProductName", "Light Switch Standalone\0"
+            VALUE "ProductVersion", "1.1.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

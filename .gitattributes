@@ -1,0 +1,21 @@
+# Line-ending policy.
+#
+# Without this file, `core.autocrlf=true` (the default on Windows) silently
+# decides for every file, and a later change of mind costs one whole-repository
+# renormalisation commit. Setting it up front keeps the history clean.
+#
+# The rule: normalise to LF in the repository, restore native endings in the
+# working tree. Files that Windows tooling expects to be CRLF are pinned.
+
+* text=auto
+
+# MSVC / resource tooling. These are pinned to CRLF so Visual Studio, rc.exe and
+# mt.exe see exactly what they wrote.
+*.rc        text eol=crlf
+*.bat       text eol=crlf
+*.vcxproj   text eol=crlf
+
+# Binary.
+*.zip       binary
+*.png       binary
+*.ico       binary

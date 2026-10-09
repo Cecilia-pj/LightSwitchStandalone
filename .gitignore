@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+
+# Release packages. These are built OUTSIDE the repository, one level up, so the
+# repository stays source-only. Kept here as a guard in case one is ever built in
+# place.
+dist/
+
+# Generated at runtime next to the executable
+lightswitch.log
+settings.json
+
+# Upstream comparison cache
+tools/upstream-cache/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.vcxproj.filters
+*.VC.db
+*.VC.VC.opendb
