@@ -69,6 +69,13 @@ enum class Str
     DialogButtonCancel,
     LanguageAuto,
 
+    // ---- settings dialog: interface theme ------------------------------
+    DialogGroupTheme,
+    DialogLabelTheme,
+    ThemeAuto,
+    ThemeLight,
+    ThemeDark,
+
     // ---- schedule mode names ------------------------------------------
     ModeOff,
     ModeFixedHours,

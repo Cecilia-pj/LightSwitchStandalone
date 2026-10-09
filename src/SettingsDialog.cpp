@@ -5,6 +5,8 @@
 #include "Config.h"
 #include "L10n.h"
 #include "Logging.h"
+#include "dark/DarkApp.h"
+#include "dark/darkui.h"
 #include "resource.h"
 #include "vendor/ThemeHelper.h"
 #include "vendor/ThemeScheduler.h"
@@ -48,6 +50,27 @@ constexpr Str kModeComboTexts[] = {
     Str::ModeFollowNightLight,
 };
 
+// Theme combo order. Kept as two parallel arrays rather than one table of
+// {label, value} pairs so both stay usable in a constexpr context on every
+// compiler this project supports. kThemeValues holds the exact strings
+// Config::NormalizeUiTheme() accepts, so a dropdown entry can never resolve to
+// something settings.json would not round-trip.
+constexpr Str kThemeComboTexts[] = {
+    Str::ThemeAuto,
+    Str::ThemeLight,
+    Str::ThemeDark,
+};
+
+constexpr const wchar_t* kThemeValues[] = {
+    L"auto",
+    L"light",
+    L"dark",
+};
+
+static_assert(sizeof(kThemeComboTexts) / sizeof(kThemeComboTexts[0]) ==
+                  sizeof(kThemeValues) / sizeof(kThemeValues[0]),
+              "kThemeComboTexts and kThemeValues must stay in step.");
+
 struct DialogContext
 {
     ISettingsHost* host = nullptr;
@@ -83,6 +106,8 @@ constexpr ControlText kControlTexts[] = {
     { IDC_CHK_STARTUP, Str::DialogCheckStartup },
     { IDC_STATIC_GROUP_LANGUAGE, Str::DialogGroupLanguage },
     { IDC_STATIC_LBL_LANGUAGE, Str::DialogLabelLanguage },
+    { IDC_STATIC_GROUP_THEME, Str::DialogGroupTheme },
+    { IDC_STATIC_LBL_THEME, Str::DialogLabelTheme },
     { IDC_BTN_TOGGLE, Str::DialogButtonToggleNow },
     { IDC_BTN_RESTART_EXPLORER, Str::DialogButtonRestartExplorer },
     { IDC_BTN_OPEN_FOLDER, Str::DialogButtonOpenFolder },
@@ -466,6 +491,50 @@ void PopulateLanguageCombo(HWND dialog, const std::wstring& configured)
 }
 
 // --------------------------------------------------------------------------
+// Theme combo
+// --------------------------------------------------------------------------
+//
+// The values that travel to and from settings.json are the same three strings
+// Config::NormalizeUiTheme() knows, so the round trip is closed: whatever the
+// combo produces, the file will read back unchanged on the next launch.
+
+int ThemeComboIndex(const std::wstring& configured)
+{
+    constexpr int kCount = static_cast<int>(sizeof(kThemeValues) / sizeof(kThemeValues[0]));
+
+    // Normalise first: "DARK", " dark " and "dark" all land on the same entry,
+    // and a typo in the file falls back to "auto" - the same degradation the
+    // config layer applies when it loads.
+    const std::wstring normalized = NormalizeUiTheme(configured);
+    for (int i = 0; i < kCount; ++i)
+    {
+        if (normalized == kThemeValues[i])
+            return i;
+    }
+    return 0;
+}
+
+std::wstring ThemeFromCombo(HWND dialog)
+{
+    constexpr int kCount = static_cast<int>(sizeof(kThemeValues) / sizeof(kThemeValues[0]));
+
+    const LRESULT index = SendDlgItemMessageW(dialog, IDC_CMB_THEME, CB_GETCURSEL, 0, 0);
+    if (index < 0 || index >= kCount)
+        return L"auto";
+    return kThemeValues[index];
+}
+
+void PopulateThemeCombo(HWND dialog, const std::wstring& configured)
+{
+    SendDlgItemMessageW(dialog, IDC_CMB_THEME, CB_RESETCONTENT, 0, 0);
+    for (Str label : kThemeComboTexts)
+        SendDlgItemMessageW(dialog, IDC_CMB_THEME, CB_ADDSTRING, 0,
+                            reinterpret_cast<LPARAM>(L10n::T(label)));
+    SendDlgItemMessageW(dialog, IDC_CMB_THEME, CB_SETCURSEL,
+                        static_cast<WPARAM>(ThemeComboIndex(configured)), 0);
+}
+
+// --------------------------------------------------------------------------
 // Text helpers
 // --------------------------------------------------------------------------
 
@@ -650,6 +719,7 @@ void Populate(HWND dialog, const Config& config)
     CheckDlgButton(dialog, IDC_CHK_STARTUP, config.startOnLogin ? BST_CHECKED : BST_UNCHECKED);
 
     PopulateLanguageCombo(dialog, config.language);
+    PopulateThemeCombo(dialog, config.uiTheme);
 
     RefreshEnabledState(dialog);
     RefreshSunInfo(dialog);
@@ -727,6 +797,7 @@ bool Harvest(HWND dialog, Config& config)
     result.hotkey = GetHotkeyControl(dialog);
     result.startOnLogin = IsDlgButtonChecked(dialog, IDC_CHK_STARTUP) == BST_CHECKED;
     result.language = LanguageFromCombo(dialog);
+    result.uiTheme = ThemeFromCombo(dialog);
 
     config = result;
     return true;
@@ -763,6 +834,20 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
 
         if (ctx)
             Populate(dialog, ctx->config);
+
+        // ---- dark mode ---------------------------------------------------
+        // The three steps below are ordered, and the order is not symmetric:
+        //   SetFromConfig  - hand the saved "uiTheme" to the module;
+        //   InstallControls- subclass the controls (darkui + DarkControls);
+        //   ApplyNow       - build the palette and repaint the tree.
+        // Installing *after* applying would leave the controls themed on paper
+        // but never repainted, which looks exactly like "dark mode does not
+        // work" and reports no error anywhere. See src/dark/DarkApp.h.
+        if (ctx)
+            DarkApp::SetFromConfig(ctx->config.uiTheme);
+        DarkApp::InstallControls(dialog);
+        DarkApp::ApplyNow(dialog);
+
         return TRUE;
     }
 
@@ -793,6 +878,21 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
                 RefreshSunInfo(dialog);
             return TRUE;
 
+        case IDC_CMB_THEME:
+            if (notification == CBN_SELCHANGE)
+            {
+                // Live preview. ApplyNow rather than ApplyIfNeeded: this path
+                // also has to FlushMenuThemes, so that a tray popup opened
+                // later in the session picks up the scheme just chosen. The
+                // return value of SetFromConfig is deliberately ignored - even
+                // when the resolved theme did not change (auto -> light while
+                // Windows is already light) the module still needs the call so
+                // its state matches the combo.
+                DarkApp::SetFromConfig(ThemeFromCombo(dialog));
+                DarkApp::ApplyNow(dialog);
+            }
+            return TRUE;
+
         case IDC_BTN_TOGGLE:
             if (context && context->host)
                 context->host->OnToggleNow();
@@ -814,8 +914,18 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
         }
 
         case IDC_BTN_RESET:
-            Populate(dialog, Config{});
+        {
+            const Config defaults;
+            Populate(dialog, defaults);
+
+            // The theme is previewed live, so restoring the defaults has to
+            // move the preview as well - otherwise the combo would read
+            // "Follow Windows" while the dialog went on showing the pinned
+            // theme that was on screen a moment ago.
+            DarkApp::SetFromConfig(defaults.uiTheme);
+            DarkApp::ApplyNow(dialog);
             return TRUE;
+        }
 
         case IDOK:
         {
@@ -846,11 +956,27 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
             if (context->host)
                 context->host->OnSettingsSaved();
 
+            // Re-assert the saved theme and force a full Apply. The live
+            // preview has normally left the module on the right scheme already,
+            // but Apply is also what calls FlushMenuThemes, and without that a
+            // tray popup opened while the dialog was dark would keep the dark
+            // menu after switching back to light. ApplyNow, never conditional.
+            DarkApp::SetFromConfig(updated.uiTheme);
+            DarkApp::ApplyNow(dialog);
+
             EndDialog(dialog, languageChanged ? kReloadDialog : IDOK);
             return TRUE;
         }
 
         case IDCANCEL:
+            // Undo a live preview. The combo may have been moved without the
+            // user saving, and the module would otherwise keep that scheme for
+            // the rest of the session - the tray menu in particular.
+            if (context)
+            {
+                DarkApp::SetFromConfig(context->config.uiTheme);
+                DarkApp::ApplyNow(dialog);
+            }
             EndDialog(dialog, IDCANCEL);
             return TRUE;
 
@@ -859,6 +985,86 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
         }
         return FALSE;
     }
+
+    // ----------------------------------------------------------------------
+    // Dark mode plumbing
+    // ----------------------------------------------------------------------
+    // These messages are simply forwarded to the interface layer; it owns the
+    // drawing. Nothing here knows what a dark control looks like.
+
+    case WM_ERASEBKGND:
+    {
+        // A #32770 dialog would erase itself from the brush returned by
+        // WM_CTLCOLORDLG, which is forwarded below and works. Doing the fill
+        // here as well costs one FillRect and removes any dependence on
+        // DefDlgProc's brush lookup - and this is the message the skill's own
+        // checklist asks a host to handle.
+        HBRUSH background = DarkApp::BgBrush();
+        if (!background)
+            return TRUE;
+
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        RECT client{};
+        GetClientRect(dialog, &client);
+        FillRect(dc, &client, background);
+        return TRUE;
+    }
+
+    case WM_DRAWITEM:
+    {
+        LRESULT result = 0;
+        if (darkui::HandleDrawItem(lParam, &result))
+            return result;
+        return FALSE;
+    }
+
+    case WM_MEASUREITEM:
+    {
+        LRESULT result = 0;
+        if (darkui::HandleMeasureItem(lParam, &result))
+            return result;
+        return FALSE;
+    }
+
+    case WM_NOTIFY:
+    {
+        LRESULT result = 0;
+        if (darkui::HandleNotify(lParam, &result))
+            return result;
+        return FALSE;
+    }
+
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+    {
+        // Note this is the *dialog's* copy of the message. A ComboBox sends
+        // these to itself instead, which is why the interface layer subclasses
+        // the ComboBox and why the two new combos work without anything here.
+        LRESULT result = 0;
+        if (darkui::HandleCtlColor(message, wParam, &result))
+            return result;
+        return FALSE;
+    }
+
+    // Windows switched between its light and dark app theme while this dialog
+    // was open. ApplyIfNeeded is a no-op when the user pinned a theme, so a
+    // pinned dialog stays pinned instead of following Windows.
+    case WM_SETTINGCHANGE:
+        if (DarkApp::IsColorSchemeChange(lParam))
+            DarkApp::ApplyIfNeeded(dialog);
+        break;
+
+    // Raised by uxtheme when the theme data itself is reloaded - a colour
+    // scheme change, a high contrast toggle, a theme being applied. Conditional
+    // for the same reason as above: when the resolved theme did not move there
+    // is nothing to rebuild, and in particular no stale menu-theme cache to
+    // flush, because the cache is keyed on the theme that is still current.
+    case WM_THEMECHANGED:
+        DarkApp::ApplyIfNeeded(dialog);
+        return 0;
 
     default:
         break;

@@ -28,7 +28,7 @@
 /////////////////////////////////////////////////////////////////////////////
 // Settings dialog
 
-IDD_SETTINGS DIALOGEX 0, 0, 340, 361
+IDD_SETTINGS DIALOGEX 0, 0, 340, 397
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION ""
 FONT 9, "Segoe UI", 400, 0, 0x1
@@ -41,9 +41,13 @@ BEGIN
     // CJK glyph is roughly one em wide, so "浅色主题开始时间：" (9 glyphs) needs
     // more room than "Light theme starts at:" even though it looks shorter.
     LTEXT           "", IDC_STATIC_LBL_LIGHT, 14, 41, 84, 9         // Light theme starts at:
-    CONTROL         "", IDC_DTP_LIGHT, "SysDateTimePick32", DTS_TIMEFORMAT | WS_TABSTOP, 102, 39, 62, 13
+    // DTS_UPDOWN turns the drop-down arrow into an up/down spinner. That is not
+    // just cosmetic: the drop-down panel is a separate system-populated window
+    // that cannot be darkened, so removing it is the only way to keep the dialog
+    // fully dark. See the "Dark mode" section of README.md.
+    CONTROL         "", IDC_DTP_LIGHT, "SysDateTimePick32", DTS_TIMEFORMAT | DTS_UPDOWN | WS_TABSTOP, 102, 39, 62, 13
     LTEXT           "", IDC_STATIC_LBL_DARK, 180, 41, 84, 9         // Dark theme starts at:
-    CONTROL         "", IDC_DTP_DARK, "SysDateTimePick32", DTS_TIMEFORMAT | WS_TABSTOP, 268, 39, 62, 13
+    CONTROL         "", IDC_DTP_DARK, "SysDateTimePick32", DTS_TIMEFORMAT | DTS_UPDOWN | WS_TABSTOP, 268, 39, 62, 13
     LTEXT           "", IDC_STATIC_SUN, 14, 58, 314, 18             // live status line
 
     // ---- Apply to / 生效范围 ---------------------------------------------
@@ -80,21 +84,29 @@ BEGIN
     LTEXT           "", IDC_STATIC_LBL_LANGUAGE, 14, 312, 42, 9     // Language:
     COMBOBOX        IDC_CMB_LANG, 60, 310, 220, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
+    // ---- Interface theme / 界面主题 ---------------------------------------
+    GROUPBOX        "", IDC_STATIC_GROUP_THEME, 7, 337, 326, 32
+    LTEXT           "", IDC_STATIC_LBL_THEME, 14, 348, 42, 9        // Theme:
+    COMBOBOX        IDC_CMB_THEME, 60, 346, 150, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
     // ---- Button row (re-laid out at runtime) ------------------------------
-    PUSHBUTTON      "", IDC_BTN_TOGGLE, 7, 340, 50, 14
-    PUSHBUTTON      "", IDC_BTN_RESTART_EXPLORER, 62, 340, 78, 14
-    PUSHBUTTON      "", IDC_BTN_OPEN_FOLDER, 145, 340, 56, 14
-    PUSHBUTTON      "", IDC_BTN_RESET, 206, 340, 78, 14
-    DEFPUSHBUTTON   "", IDOK, 285, 340, 22, 14
-    PUSHBUTTON      "", IDCANCEL, 311, 340, 21, 14
+    // Only the x coordinates are recomputed (LayoutButtonRow packs them to the
+    // measured label widths); the y below is what the dialog will use, so the row
+    // has to be moved down by hand whenever a group is inserted above it.
+    PUSHBUTTON      "", IDC_BTN_TOGGLE, 7, 376, 50, 14
+    PUSHBUTTON      "", IDC_BTN_RESTART_EXPLORER, 62, 376, 78, 14
+    PUSHBUTTON      "", IDC_BTN_OPEN_FOLDER, 145, 376, 56, 14
+    PUSHBUTTON      "", IDC_BTN_RESET, 206, 376, 78, 14
+    DEFPUSHBUTTON   "", IDOK, 285, 376, 22, 14
+    PUSHBUTTON      "", IDCANCEL, 311, 376, 21, 14
 END
 
 /////////////////////////////////////////////////////////////////////////////
 // Version information
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,1,0,0
- PRODUCTVERSION 1,1,0,0
+ FILEVERSION 1,2,0,0
+ PRODUCTVERSION 1,2,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -107,12 +119,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "LightSwitch Standalone contributors\0"
             VALUE "FileDescription", "Light Switch Standalone\0"
-            VALUE "FileVersion", "1.1.0.0\0"
+            VALUE "FileVersion", "1.2.0.0\0"
             VALUE "InternalName", "LightSwitchStandalone\0"
             VALUE "LegalCopyright", "Portions Copyright (c) Microsoft Corporation (MIT).\0"
             VALUE "OriginalFilename", "LightSwitchStandalone.exe\0"
             VALUE "ProductName", "Light Switch Standalone\0"
-            VALUE "ProductVersion", "1.1.0.0\0"
+            VALUE "ProductVersion", "1.2.0.0\0"
         END
     END
     BLOCK "VarFileInfo"

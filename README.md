@@ -36,6 +36,10 @@ bin/Release/LightSwitchStandalone.exe   ~520 KB, static CRT
 * Localised interface — **English** and **简体中文** — that follows the Windows
   display language by default and can be overridden in the settings dialog.
   Switching takes effect immediately, without a restart.
+* Dark-mode interface. The settings dialog and the tray menu follow the Windows
+  app theme by default, and can be pinned to light or dark. Switching is live,
+  and the dialog is fully dark — no white ComboBox drop-down, no light date
+  picker panel, no system-coloured group boxes.
 * Live reload: editing `settings.json` in a text editor takes effect within a
   second, no restart needed.
 
@@ -67,12 +71,14 @@ The project is a single `.vcxproj` with two configurations, both **x64 only**
 | `LanguageStandard` | `stdcpp20` | Structured bindings in `ThemeScheduler.cpp`, `contains()` elsewhere. |
 | `RuntimeLibrary` | `MultiThreaded` / `MultiThreadedDebug` | **Static CRT**, so no VC++ redistributable and a truly portable folder. |
 | `GenerateManifest` | `false` | The manifest is embedded by `src/LightSwitch.rc` as `RT_MANIFEST`; that avoids `mt.exe` having to merge two manifests that both declare an `assemblyIdentity`. |
-| Link libraries | `Advapi32 User32 Gdi32 Shell32 Shlwapi Ole32 Comctl32 Kernel32` | Everything else is static CRT + STL. |
+| Link libraries | `Advapi32 User32 Gdi32 Shell32 Shlwapi Ole32 Comctl32 Kernel32 Dwmapi Uxtheme` | Everything else is static CRT + STL. `Dwmapi` is for the immersive dark title bar, `Uxtheme` for the undocumented `SetPreferredAppMode` / `AllowDarkModeForWindow` ordinals — see *Dark mode*. |
+| Warning level | `Level4` | `src/dark/darkmode.cpp` and `src/dark/darkui.cpp` are pinned to `Level3`; see *Dark mode > Provenance*. |
 
 Resulting import table, for reference:
 
 ```
 ADVAPI32.dll  USER32.dll  GDI32.dll  SHELL32.dll  ole32.dll  COMCTL32.dll  KERNEL32.dll
+dwmapi.dll  UxTheme.dll
 ```
 
 ### Building on a machine where MSBuild is blocked
@@ -83,10 +89,14 @@ configuration can be driven directly through the toolchain — set `INCLUDE`,
 
 ```sh
 cl /nologo /c /MP /EHsc /std:c++20 /utf-8 /W4 /permissive- /GS /O2 /MT /DNDEBUG \
-   /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE /I src /Fo obj/ src/*.cpp src/vendor/*.cpp
+   /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE /I src /Fo obj/ \
+   src/*.cpp src/dark/DarkApp.cpp src/dark/DarkControls.cpp src/vendor/*.cpp
+# src/dark/darkmode.cpp and darkui.cpp are compiled separately, at /W3
 rc /nologo /I src /fo obj/LightSwitch.res src/LightSwitch.rc
 link /nologo /SUBSYSTEM:WINDOWS /MANIFEST:NO /OUT:bin/Release/LightSwitchStandalone.exe \
-   obj/*.obj obj/LightSwitch.res Advapi32.lib User32.lib Gdi32.lib Shell32.lib Shlwapi.lib Ole32.lib Comctl32.lib Kernel32.lib
+   obj/*.obj obj/LightSwitch.res \
+   Advapi32.lib User32.lib Gdi32.lib Shell32.lib Shlwapi.lib Ole32.lib Comctl32.lib Kernel32.lib \
+   Dwmapi.lib Uxtheme.lib
 ```
 
 ---
@@ -145,14 +155,15 @@ can be copied over verbatim for comparison.
   "longitude":        { "value": "0.0" },
   "toggle-theme-hotkey": { "value": { "win": true, "ctrl": true, "alt": false, "shift": true, "code": 68 } },
   "startOnLogin":     { "value": false },
-  "language":         { "value": "auto" }
+  "language":         { "value": "auto" },
+  "uiTheme":          { "value": "auto" }
 }
 ```
 
 `scheduleMode` accepts `"Off"`, `"FixedHours"`, `"SunsetToSunrise"`,
 `"FollowNightLight"`. `lightTime` / `darkTime` are minutes since midnight.
-`code` is a virtual-key code (`68` = `D`). `startOnLogin` and `language` are the
-only two standalone-specific extensions.
+`code` is a virtual-key code (`68` = `D`). `startOnLogin`, `language` and
+`uiTheme` are the only standalone-specific extensions.
 
 `language` accepts `"auto"` (follow the Windows display language), `"en-US"` /
 `"en"`, or `"zh-CN"` / `"zh"` / `"zh-Hans"`, case-insensitively. The value is
@@ -161,6 +172,19 @@ rather than falling back to English. Anything unrecognised — including a typo 
 degrades to `"auto"` instead of pinning a language, and the app rewrites the
 canonical form on the next save. An explicit code pins the interface even if
 Windows is running in another language.
+
+`uiTheme` accepts `"auto"` (follow the Windows **app** theme,
+`AppsUseLightTheme`), `"light"` or `"dark"`, case-insensitively and ignoring
+surrounding whitespace. Anything unrecognised — including a typo — becomes
+`"auto"`, so a bad value degrades to following Windows rather than pinning the
+interface to a theme nobody asked for.
+
+> `uiTheme` is written by this component only. It is **not** written by the
+> Light Switch scheduling code, even though both ultimately look at
+> `AppsUseLightTheme`: the scheduler's job is to *set* that value from a
+> schedule, while `uiTheme` only *reads* it to decide how to draw this
+> application's own windows. Setting `uiTheme` never changes the Windows theme,
+> and the scheduler never reads `uiTheme`.
 
 The file watcher compares content, so a write from the app itself never causes a
 reload loop. A malformed file is reported in the log and ignored — the previous
@@ -176,7 +200,7 @@ One process, several threads — deliberately *not* the upstream
 
 | Thread | File | Responsibility |
 |---|---|---|
-| UI / message loop | `App.cpp`, `TrayIcon.cpp`, `HotkeyManager.cpp`, `SettingsDialog.cpp` | Tray icon, `WM_HOTKEY`, `WM_POWERBROADCAST`, the modal settings dialog. Never touches the registry. |
+| UI / message loop | `App.cpp`, `TrayIcon.cpp`, `HotkeyManager.cpp`, `SettingsDialog.cpp`, `dark/` | Tray icon, `WM_HOTKEY`, `WM_POWERBROADCAST`, the modal settings dialog, and all dark-mode handling. Never touches the registry. |
 | Scheduler worker | `Scheduler.cpp`, `StateManager.cpp`, `ThemeEngine.cpp` | Minute ticks, state machine, all registry writes and broadcasts, night-light watcher lifecycle. |
 | Night-light observer | `vendor/NightLightRegistryObserver.h` | `RegNotifyChangeKeyValue` loop; signals the worker. |
 | Settings watcher | `Config.cpp` | `ReadDirectoryChangesW` + debounce + content comparison; signals the worker. |
@@ -201,6 +225,7 @@ HotkeyManager.*     RegisterHotKey, low-level keyboard hook fallback
 TrayIcon.*          Shell_NotifyIcon, GDI-drawn icon, popup menu
 SettingsDialog.*    Win32 dialog (no WPF/WinUI)
 AutoStart.*         HKCU\...\Run management
+dark/               dark-mode support; see Dark mode below
 vendor/             unmodified upstream logic (see UPSTREAM.md)
 ```
 
@@ -286,6 +311,121 @@ be delivered as that file and checked mechanically.
 
 ---
 
+## Dark mode
+
+The settings dialog and the tray popup menu can be drawn light or dark,
+independently of what the scheduler is doing to the Windows theme.
+
+### The three modes
+
+| `uiTheme` | Menu label | Behaviour |
+|---|---|---|
+| `"auto"` (default) | *Follow Windows* | Reads `AppsUseLightTheme` — the same value the scheduler writes — so the interface matches whatever the rest of Windows is using. |
+| `"light"` | *Light* | Pinned light. A Windows theme change does not move it. |
+| `"dark"` | *Dark* | Pinned dark. A Windows theme change does not move it. |
+
+The dropdown is the *Interface theme* group, the last one in the dialog.
+
+### Live preview, save and cancel
+
+Changing the dropdown re-themes the open dialog immediately, so you can see what
+you are choosing. That preview also pushes the choice into the module — which is
+what lets the tray menu, built later on a right-click, pick the new scheme up.
+
+* **Save** persists `uiTheme` and re-applies.
+* **Cancel** puts the theme back to what `settings.json` holds, so leaving a
+  preview on screen does not strand the process in a theme the user rejected.
+* **Restore defaults** resets the dropdown to *Follow Windows* and moves the
+  preview with it, rather than leaving the combo reading one thing and the
+  window showing another.
+
+### Following Windows live
+
+While `uiTheme` is `"auto"`, both the dialog and the tray application react to
+`WM_SETTINGCHANGE` with `lParam == "ImmersiveColorSet"` and to
+`WM_THEMECHANGED`. Flip Windows between light and dark with the dialog open and
+it changes under you; leave it pinned and it does not move at all.
+
+### Why there are two extra modules
+
+Windows ships dark resources for only a handful of controls, so most of the work
+is self-drawing. Two layers take care of it:
+
+* `src/dark/darkmode.{h,cpp}` — the **system layer**. DWM window chrome, the
+  undocumented `uxtheme` ordinals, system-theme detection, the palette, and
+  preference persistence.
+* `src/dark/darkui.{h,cpp}` — the **interface layer**. Turns an existing control
+  tree dark by class name: Static, Edit, ListBox, ComboBox, Button, CheckBox,
+  RadioButton, GroupBox, ListView, TreeView, StatusBar, the menu bar and popup
+  menus.
+
+Those four files are copied **byte for byte** from the author's own
+`win32-dark-mode` skill and are never edited (see *Provenance* below). Two small
+project-side modules sit on top of them instead:
+
+* `src/dark/DarkApp.{h,cpp}` — the **only** place that talks to the module. It
+  exists because `dm::Init()` and `dm::OnApply(darkui::Apply)` must both run, in
+  that order, before any window exists, and forgetting the second one fails
+  *silently*: the title bar and palette go dark, every control stays light, and
+  nothing is logged. One function that cannot be called half-way removes that
+  class of bug. It also owns the "is the theme already right?" test, so the
+  dialog and the tray menu cannot disagree about it.
+* `src/dark/DarkControls.{h,cpp}` — self-drawn replacements for the two controls
+  the interface layer does not cover. See below.
+
+### The two controls that needed a takeover
+
+`SysDateTimePick32` (the two time pickers) and `msctls_hotkey32` (the shortcut
+box) have no dark theme class and ignore every `WM_CTLCOLOR*` message, so there
+is nothing to switch on — their painting has to be taken over outright.
+`DarkControls` subclasses them and intercepts **only** the painting messages
+(`WM_ERASEBKGND`, `WM_PAINT`, `WM_NCPAINT`, focus/enable changes). Mouse
+hit-testing, keyboard input, the spinner, and the `DTM_*` / `HKM_*` message
+storage all stay with the control, so both keep working exactly as before —
+only the pixels change.
+
+One consequence is visible in the dialog template: **both date pickers carry
+`DTS_UPDOWN`**. That replaces the drop-down calendar with an up/down spinner.
+It is not cosmetic. The drop-down panel is a separate window that the system
+populates and draws itself, and there is no way to darken it; removing it is the
+only way to keep the dialog free of one bright white rectangle.
+
+The other is that the shortcut box **does not show the Win key**. That was
+already true before dark mode — `msctls_hotkey32` cannot represent `MOD_WIN` at
+all, which is exactly why the dialog has a separate *Include Win key* checkbox.
+The dark field simply draws what the control can actually store.
+
+### What is deliberately not dark
+
+| Thing | Why |
+|---|---|
+| The validation and confirmation `MessageBox`s (invalid coordinates, invalid offsets, "nothing to change", restart Explorer, `--help`) | `MessageBox` is drawn by the system on the application's behalf, in a way an application cannot reach. Only an owner-drawn replacement could change it, which is a much larger change than the feature is worth. |
+| The tray icon's hover tooltip | Also system-drawn. |
+| `lightswitch.log` | Unaffected — the log is a file, not a surface. |
+
+### Provenance
+
+`src/dark/darkmode.{h,cpp}` and `src/dark/darkui.{h,cpp}` are assets of the
+author's `win32-dark-mode` skill, not upstream PowerToys code and not derived
+from it. They are copied verbatim so that a hash can prove it:
+
+```sh
+sha256sum src/dark/darkmode.h src/dark/darkmode.cpp src/dark/darkui.h src/dark/darkui.cpp
+```
+
+Both `.cpp` files are compiled at **warning level 3** rather than the project's
+level 4, because that is what they were written and verified against. Raising
+the level would mean editing them, which would destroy the only evidence that
+they are unmodified. The `.vcxproj` sets the lower level per file, and nothing
+else in the project is exempt.
+
+The project has no other dark-mode dependency: no library, no NuGet package and
+no redistributable. `dwmapi.dll` and `uxtheme.dll` are OS components, and the
+`uxtheme` entry points used are resolved by **ordinal** at runtime, not linked by
+name.
+
+---
+
 ## Behaviour fidelity vs. upstream
 
 ### Kept identical
@@ -322,6 +462,9 @@ be delivered as that file and checked mechanically.
 | Interface strings live in a compiled-in table, not in Win32 string resources | One source of truth per string, and no `.rc` code page to get wrong for non-ASCII. Upstream has no localisation at all. | Translating means editing `src/L10n.cpp` and rebuilding; there is no satellite DLL to drop in. See *Localisation*. |
 | The dialog template carries no text | The same single-source-of-truth reason. Each label needs a real control id so it can be set at `WM_INITDIALOG`. | `LightSwitch.rc` is geometry + ids; the English wording survives only as comments. |
 | The button row and over-long labels are laid out at runtime | Translated labels have different widths, and CJK labels are wider than they look. | No more `Restore defaults` overlapping `Save`, and a translated label is widened rather than clipped. |
+| The dialog has an **Interface theme** group that upstream does not have | Upstream has no dark-mode support at all — it is a WinUI page and gets its theme from PowerToys. | One more dropdown and one more `settings.json` key. Nothing about the scheduling behaviour changes. |
+| Both time pickers use `DTS_UPDOWN` instead of a drop-down calendar | The calendar panel cannot be darkened. | Up/down spinner instead of a calendar. The values, the `DTN_DATETIMECHANGE` notification and the stored format are unchanged. |
+| The interface can be pinned light or dark regardless of the schedule | The schedule decides what Windows looks like; `uiTheme` decides what *this application's* windows look like. Conflating them would make the settings dialog change colour when you are trying to configure the schedule. | `uiTheme` is independent of `changeSystem` / `changeApps` / `scheduleMode`. |
 
 ---
 
@@ -339,7 +482,11 @@ be delivered as that file and checked mechanically.
 | **Vendor drift.** The upstream module is still evolving. | `UPSTREAM.md` pins the commit and `tools/fetch_upstream.ps1` diffs the local copies against upstream on demand. |
 | **Upstream writes a settings file with more keys** (Power Display profile fields). | Unknown keys are preserved in the file? **No** — the app rewrites the file from its own model, so Power Display keys are dropped if you point it at a real PowerToys file. Back up first, or use a separate folder. |
 | **A translation is wider than the English it replaces, and a label gets clipped.** Chinese is usually *narrower*, but a full-width glyph is ≈1 em and the template boxes were sized for English. | `FitLabels()` measures every static and widens it at runtime, logging each change at DEBUG level. The fallback only ever grows a box and never pushes it past its nearest same-row neighbour, so it cannot make things worse. **Adding a language or re-wording a string still deserves a visual check** — the automatic fitter does not reflow the layout, it only widens. If you see a clipped label, that is a bug: attach `lightswitch.log` (the `Widened a label…` lines show what the fitter did). |
-| **A translation forgets a `%1` placeholder.** | `--dump-strings` makes this checkable: diff the two language sections and confirm every id carries the same placeholder set. `Format()` leaves an unmatched placeholder verbatim rather than eating it, so the bug is visible in the UI instead of silent. |
+| **A translation forgets a `%1` placeholder.** | `--dump-strings` makes this checkable: diff the two language sections and confirm every id carries the same set of placeholders. `Format()` leaves an unmatched placeholder verbatim rather than eating it, so the bug is visible in the UI instead of silent. |
+| **The `uxtheme` entry points are undocumented ordinals.** `SetPreferredAppMode` (135), `AllowDarkModeForWindow` (133), `FlushMenuThemes` (136) and friends are exported by number only, so `GetProcAddress` must be given `MAKEINTRESOURCEA(ordinal)`. A future Windows could renumber them. | Every one of them is resolved at runtime and the result is checked; a failed lookup falls through to a light but fully working interface. `dm::Init()`'s return value reports whether the DWM dark title bar is available at all (Windows 10 1809 / build 17763 and later). Nothing crashes, and the log records what happened. |
+| **A future control is added to the dialog and stays light.** The interface layer dispatches by *class name*, so a class nobody taught it about is simply left alone. | The classes the dialog uses are covered, and the two that were not have their own module. If you add a control in a new class, check it in dark mode: `WM_CTLCOLOR*` forwarding, subclassing, or a self-drawn takeover — in that order of preference. |
+| **A third-party shell replacement or a classic (non-themed) visual style.** | The dark-mode module calls `SetWindowTheme(h, L"", L"")` on several controls and re-draws them itself. Under a non-default visual style the self-drawn parts still follow the app's palette; what changes is how the *system*-drawn parts (popup menus, title bar) look. |
+| **Windows High Contrast is on.** | The module keeps drawing its own palette, so the interface stays dark or light as configured and is *not* overridden by High Contrast. If you rely on High Contrast for legibility, set `uiTheme` to `"light"` (or use the Light theme) rather than expecting the module to defer. |
 
 ---
 
@@ -409,6 +556,31 @@ LightSwitchStandalone.exe --help        显示以上说明
    不会把界面锁死。
 5. Windows 显示语言**在运行期间改变**也会自动跟上（只要你还处在 `auto`）。
 
+### 界面深色模式怎么设
+
+1. **默认跟随系统。** 程序读的是 Windows 的**应用**主题
+   （`AppsUseLightTheme`），也就是「设置 > 个性化 > 颜色」里的那个，
+   和本程序自带的切换计划写的是同一个值。
+2. **想手动指定**，打开设置对话框，最后一个分组「界面主题」，下拉选
+   `跟随 Windows` / `浅色` / `深色`，然后点「保存」。
+3. **下拉一改就立刻变**，不用保存也能先看效果：
+   - 点「保存」→ 写入 `settings.json` 并重新应用；
+   - 点「取消」→ 主题回到 `settings.json` 里的值，不会把预览留在界面上；
+   - 点「恢复默认」→ 下拉回到「跟随 Windows」，界面也跟着一起回去。
+4. 设置存在 `settings.json` 的 `uiTheme` 键里：
+
+   ```json
+   { "uiTheme": { "value": "auto" } }
+   ```
+
+   `"auto"` 跟随系统；`"light"` / `"dark"` 是**锁定**，之后系统主题再怎么变都不动。
+   填了无法识别的值（比如打错字）会当作 `"auto"`，不会把界面锁死。
+5. 处在 `auto` 时，运行期间把 Windows 在浅色/深色之间切换，**对话框会当场跟着变**，
+   不用关掉重开；锁定了就不会动。
+6. 深色是**全深色**：标题栏、分组框、复选框、下拉列表（展开的列表也是深的）、
+   时间框和它的上下箭头、快捷键框都处理过，没有白块。
+   只有系统自己弹的消息框（比如坐标填错的警告）着色改不了，那是系统画的。
+
 ### 文件放在哪
 
 | 文件 | 位置 |
@@ -429,6 +601,12 @@ LightSwitchStandalone.exe --help        显示以上说明
   `Widened a label from N to M px` 这类记录能说明当时量到了多少。
 * **繁体中文用户看到的是简体译文**，不是英文。这是刻意的：本构建只带一套中文译文，
   `zh-TW` 会落到简体。对繁体读者来说，另一套中文也比英文更好用。
+* **时间框怎么没有日历了？** 现在改成上下箭头（`DTS_UPDOWN`）。日历面板是系统
+  自己开的一个独立窗口，颜色改不动，留着它深色界面里就会永远有一块白；去掉它才能
+  做到全深色。取值、通知和存储格式都没变。
+* **快捷键框里怎么看不到 Win 键？** `msctls_hotkey32` 这个控件**根本无法表示**
+  Win 键，所以一直是用旁边那个「包含 Win 键」勾选框单独保存的——深色之前就是这样，
+  不是深色模式改的。深色框只是照实画控件里真正存着的内容。
 * **托盘图标没反应 / 快捷键无效？** 先看 `lightswitch.log`。涉及 Win 键的组合被系统
   保留，程序会退回键盘钩子；若连钩子也被安全软件拦了，程序照常运行，只是快捷键不可用。
 * **任务栏颜色没变？** 部分外壳界面会缓存主题。用托盘菜单里的

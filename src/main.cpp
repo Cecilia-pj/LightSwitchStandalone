@@ -17,6 +17,7 @@
 #include "Logging.h"
 #include "Text.h"
 #include "ThemeEngine.h"
+#include "dark/DarkApp.h"
 #include "vendor/ThemeHelper.h"
 
 #include <commctrl.h>
@@ -96,6 +97,12 @@ bool ApplyOneShot(OneShot mode)
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
 {
+    // Before InitCommonControlsEx and before any window exists: uxtheme has to
+    // have the preferred app mode set before the first window is created, or
+    // that first frame is painted light and then corrected. This also registers
+    // the interface-layer callback and builds the palette.
+    ls::DarkApp::Startup();
+
     INITCOMMONCONTROLSEX commonControls{};
     commonControls.dwSize = sizeof(commonControls);
     commonControls.dwICC = ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES | ICC_DATE_CLASSES;
@@ -145,10 +152,26 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
     // Resolve the interface language before anything can display text. The
     // configured value ("auto" by default) lives in settings.json; --lang
     // overrides it for this process without touching the file.
-    std::wstring languageCode = ls::SettingsStore::Instance().Get().language;
+    const ls::Config startupConfig = ls::SettingsStore::Instance().Get();
+    std::wstring languageCode = startupConfig.language;
     if (!languageOverride.empty())
         languageCode = languageOverride;
     ls::L10n::Init(languageCode);
+
+    // Push the saved interface theme into the dark-mode module, then re-apply.
+    // Startup() primed the module from its own registry value, but settings.json
+    // is the authoritative store - so a hand-edited file wins, and doing it here
+    // means the first frame this process paints is already in the right scheme
+    // rather than flashing the registry's value and correcting a moment later.
+    ls::DarkApp::SetFromConfig(startupConfig.uiTheme);
+    ls::DarkApp::ApplyNow(nullptr);
+
+    // One line that answers "why is my window light?" without a debugger: what
+    // the file said, and what the module decided to do about it.
+    LOG_INFO(L"[main] Interface theme: " << startupConfig.uiTheme << L", resolved to "
+                                         << (ls::DarkApp::DesiredDark() ? L"dark" : L"light") << L".");
+    if (ls::DarkApp::IsFollowingSystem())
+        LOG_INFO(L"[main] The interface theme follows Windows (AppsUseLightTheme).");
 
     if (!dumpPath.empty())
     {

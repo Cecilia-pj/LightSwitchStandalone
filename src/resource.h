@@ -31,6 +31,9 @@
 // ---- interface language ---------------------------------------------------
 #define IDC_CMB_LANG 1021
 
+// ---- interface theme ------------------------------------------------------
+#define IDC_CMB_THEME 1038
+
 // ---- translated labels / group boxes --------------------------------------
 #define IDC_STATIC_GROUP_SCHEDULE 1022
 #define IDC_STATIC_LBL_MODE 1023
@@ -48,5 +51,7 @@
 #define IDC_STATIC_GROUP_SHORTCUT 1035
 #define IDC_STATIC_HINT_HOTKEY 1036
 #define IDC_STATIC_GROUP_STARTUP 1037
+#define IDC_STATIC_GROUP_THEME 1039
+#define IDC_STATIC_LBL_THEME 1040
 
 #define IDI_APPICON 2000

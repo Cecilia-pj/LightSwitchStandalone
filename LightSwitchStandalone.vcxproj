@@ -61,7 +61,10 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>Advapi32.lib;User32.lib;Gdi32.lib;Shell32.lib;Shlwapi.lib;Ole32.lib;Comctl32.lib;Kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Dwmapi/Uxtheme are for the dark-mode module only: DWMAPI for the
+           immersive dark title bar, UXTHEME for the undocumented
+           SetPreferredAppMode / AllowDarkModeForWindow ordinals. -->
+      <AdditionalDependencies>Advapi32.lib;User32.lib;Gdi32.lib;Shell32.lib;Shlwapi.lib;Ole32.lib;Comctl32.lib;Kernel32.lib;Dwmapi.lib;Uxtheme.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- The manifest is embedded by src\LightSwitch.rc as RT_MANIFEST, so the
            linker must not generate one of its own. -->
       <GenerateManifest>false</GenerateManifest>
@@ -110,6 +113,18 @@
     <ClCompile Include="src\Text.cpp" />
     <ClCompile Include="src\ThemeEngine.cpp" />
     <ClCompile Include="src\TrayIcon.cpp" />
+    <ClCompile Include="src\dark\DarkApp.cpp" />
+    <ClCompile Include="src\dark\DarkControls.cpp" />
+    <ClCompile Include="src\dark\darkmode.cpp">
+      <!-- Copied byte-for-byte from the author's win32-dark-mode skill, which
+           was written and verified against /W3. Editing the source to satisfy
+           /W4 would destroy the hash that proves it is unmodified, so the
+           warning level is lowered for these two translation units instead. -->
+      <WarningLevel>Level3</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="src\dark\darkui.cpp">
+      <WarningLevel>Level3</WarningLevel>
+    </ClCompile>
     <ClCompile Include="src\vendor\ThemeHelper.cpp" />
     <ClCompile Include="src\vendor\ThemeScheduler.cpp" />
   </ItemGroup>
@@ -129,6 +144,10 @@
     <ClInclude Include="src\Text.h" />
     <ClInclude Include="src\ThemeEngine.h" />
     <ClInclude Include="src\TrayIcon.h" />
+    <ClInclude Include="src\dark\DarkApp.h" />
+    <ClInclude Include="src\dark\DarkControls.h" />
+    <ClInclude Include="src\dark\darkmode.h" />
+    <ClInclude Include="src\dark\darkui.h" />
     <ClInclude Include="src\vendor\LightSwitchUtils.h" />
     <ClInclude Include="src\vendor\NightLightRegistryObserver.h" />
     <ClInclude Include="src\vendor\SettingsConstants.h" />

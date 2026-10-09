@@ -7,6 +7,91 @@ versioning follows the upstream PowerToys Light Switch module's schema — the
 on-disk `settings.json` contract is versioned separately from this file and is
 only ever extended additively.
 
+## [1.2.0] - 2026-10-09
+
+Dark-mode interface for the settings dialog and the tray menu, following the
+Windows app theme by default.
+
+### Added
+
+* **Dark mode for the whole interface.** The settings dialog and the tray popup
+  menu can be light or dark, chosen independently of the schedule.
+  * `"auto"` (default) follows `AppsUseLightTheme` — the same registry value the
+    scheduler writes — and follows it **live**: changing the Windows theme while
+    the dialog is open re-themes it in place.
+  * `"light"` and `"dark"` pin it, so a Windows theme change does not move it.
+* `"uiTheme"` key in `settings.json`, defaulting to `"auto"`. Unrecognised
+  values degrade to `"auto"` rather than pinning an unwanted theme.
+* An *Interface theme* groupbox in the settings dialog (`主题` in Chinese), with
+  a `Follow Windows` / `Light` / `Dark` dropdown.
+* **Live preview**: changing the dropdown re-themes the open dialog immediately.
+  `Save` persists it, `Cancel` restores the value from `settings.json`, and
+  `Restore defaults` moves the preview back to *Follow Windows* along with the
+  dropdown.
+* `src/dark/DarkApp.{h,cpp}` — the single entry point for dark mode, so the
+  mandatory `Init()` → `OnApply()` → `Install()` → `Apply()` ordering cannot be
+  got half right, and so the two call sites cannot disagree about whether the
+  theme is already correct.
+* `src/dark/DarkControls.{h,cpp}` — self-drawn dark versions of the two controls
+  the underlying module does not cover: `SysDateTimePick32` and
+  `msctls_hotkey32`. Only the painting messages are intercepted, so hit-testing,
+  keyboard input, the spinner and `DTM_*` / `HKM_*` storage all behave exactly
+  as before.
+* `src/dark/darkmode.{h,cpp}` and `src/dark/darkui.{h,cpp}` — the author's
+  `win32-dark-mode` module, copied in **byte for byte** and compiled verbatim.
+  Not upstream PowerToys code; see `UPSTREAM.md`.
+
+### Changed
+
+* Both time pickers are created with **`DTS_UPDOWN`**, replacing the drop-down
+  calendar with an up/down spinner. The calendar panel is a system-populated
+  window that cannot be darkened, so removing it is the only way to keep the
+  dialog free of a bright rectangle. Values, notifications and the stored format
+  are unchanged.
+* The dialog grew from `340 x 361` to `340 x 397` DLU to make room for the new
+  groupbox above the button row.
+* The import table grew from **7 to 9** system DLLs: `dwmapi.dll` for the
+  immersive dark title bar, `uxtheme.dll` for the undocumented
+  `SetPreferredAppMode` / `AllowDarkModeForWindow` ordinals. Both are resolved at
+  load time only for these two purposes; the `uxtheme` entry points are still
+  fetched by ordinal at runtime. The static-CRT property is unchanged — there is
+  still no `VCRUNTIME140.dll` / `MSVCP140.dll` dependency.
+* `App::HandleMessage` now also reacts to `WM_SETTINGCHANGE` with
+  `lParam == "ImmersiveColorSet"` and to `WM_THEMECHANGED`, so the theme is
+  followed while no dialog is open — the tray icon outlives every dialog.
+* The tray popup is re-themed on the way into `TrackPopupMenu`, conditionally, so
+  a right-click costs nothing when nothing changed but a `settings.json` edited
+  by hand is still picked up.
+* Version bumped to `1.2.0.0` in both places it is declared — the `VERSIONINFO`
+  block in `src/LightSwitch.rc` and `assemblyIdentity` in `src/app.manifest` —
+  keeping the executable's product version and its assembly version in step, as
+  1.1.0 had to be corrected to do.
+
+### Fixed
+
+* Nothing regressed from 1.1.0, so this section only records defects that were
+  found and fixed inside 1.2.0's own new code, during the screenshot review that
+  preceded the release. They never shipped.
+
+### Notes
+
+* A `HKM_GETHOTKEY` reading mistake was caught by the screenshot pass before
+  release: the virtual key is in the **low** byte and the modifier flags in the
+  **high** byte, so reading them the other way round turned `Ctrl+Shift+D`
+  (`0x0344`) into `Alt + Scroll Lock`. `SettingsDialog.cpp` had always read it
+  correctly; only the new self-drawn hotkey field was affected.
+* The dark-mode spinner arrows are scaled against the control's DPI rather than
+  against 96 DPI, so on a 125 % display they sit over the region the control
+  actually hit-tests rather than a few pixels to the right of it.
+* System-drawn surfaces stay light on purpose and cannot be changed from an
+  application: the `MessageBox` validation and confirmation dialogs, and the
+  tray icon's hover tooltip.
+* Windows High Contrast is **not** deferred to; the module keeps its own
+  palette. Set `uiTheme` to `"light"` if you rely on High Contrast for
+  legibility.
+* No file under `src/vendor/` was touched by this release; the vendored file
+  diffs recorded in `UPSTREAM.md` are unchanged.
+
 ## [1.1.0] - 2026-10-07
 
 Localised interface, plus the dialog layout work that fell out of it.

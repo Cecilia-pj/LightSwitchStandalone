@@ -59,22 +59,56 @@ against the pinned commit.
 ## Standalone-only additions (not upstream-derived)
 
 Everything below has no upstream counterpart. Nothing here creates a sync
-obligation, and — importantly — **the localisation work touched no file under
-`src/vendor/`**, so the per-file table above (and therefore the output of
-`tools/fetch_upstream.ps1`) is unaffected.
+obligation, and — importantly — **neither the localisation work nor the
+dark-mode work touched any file under `src/vendor/`**, so the per-file table
+above (and therefore the output of `tools/fetch_upstream.ps1`) is unaffected.
 
 | Addition | Where | Notes |
 |---|---|---|
 | Interface string table and language resolution | `src/L10n.{h,cpp}` | Upstream Light Switch has **no** localisation mechanism at all — its UI strings are hard-coded in the WinUI settings page. There is nothing to sync. |
 | Runtime dialog text, font and layout | `src/SettingsDialog.cpp` (`ApplyLocalizedText`, `FitLabels`, `LayoutButtonRow`) | The upstream settings page is XAML, replaced here by a native dialog; translation-driven measurement is a consequence of that. |
+| Dark-mode system layer and interface layer | `src/dark/darkmode.{h,cpp}`, `src/dark/darkui.{h,cpp}` | **Not PowerToys code.** See the next section. |
+| Dark-mode integration and self-drawn controls | `src/dark/DarkApp.{h,cpp}`, `src/dark/DarkControls.{h,cpp}` | Project-side; written for this component. |
 | `--lang CODE`, `--dump-strings FILE` | `src/main.cpp` | Upstream has no command line of its own; the module is loaded by the Runner. |
 | `"language"` key in `settings.json` | `src/Config.{h,cpp}` | An additive extension. Upstream never reads it, and the app only drops *unknown* keys it does not model — `language` is modelled, so it survives a round trip. |
 | `"startOnLogin"` key in `settings.json` | `src/Config.{h,cpp}` | Same story; see the "Intentionally different" table in `README.md`. |
+| `"uiTheme"` key in `settings.json` | `src/Config.{h,cpp}` | Additive, same as the two above. Note the distinction from the scheduler: `uiTheme` only decides how *this application's* windows are drawn. Nothing in `src/vendor/` reads or writes it. |
 
 If upstream ever grows a localisation mechanism of its own, translate the
 concept rather than the identifier names: the on-disk contract (`settings.json`
 mode strings, registry value names) must stay as upstream has it, and only the
 user-visible layer moves into `src/L10n.cpp`.
+
+### `src/dark/darkmode.*` and `src/dark/darkui.*` are NOT upstream PowerToys code
+
+These four files come from a different source entirely: the author's own
+`win32-dark-mode` skill — a reusable, hardware-verified Win32 dark-mode module
+with no relationship to Microsoft or to PowerToys. They are **not** derived from
+`src/modules/LightSwitch/`, they were not vendored from `microsoft/PowerToys`,
+and nothing in this repository has an obligation to keep them in sync with
+upstream.
+
+They are also **not modified here**. They are copied byte for byte, which is the
+whole point: it lets a hash prove that the code running in this binary is exactly
+the code that was tested in the skill, so a dark-mode bug can be reported against
+the skill rather than against a local fork. Verify with:
+
+```sh
+sha256sum src/dark/darkmode.h src/dark/darkmode.cpp src/dark/darkui.h src/dark/darkui.cpp
+```
+
+| File | Lines | Role |
+|---|---|---|
+| `src/dark/darkmode.h` / `.cpp` | ~105 / ~350 | System layer: DWM chrome, the undocumented `uxtheme` ordinals, system-theme detection, palette, preference persistence. No control code. |
+| `src/dark/darkui.h` / `.cpp` | ~77 / ~860 | Interface layer: turns an existing control tree dark by class name. Creates nothing, lays out nothing, changes no ids. |
+
+Two consequences are visible in the project files and are deliberate:
+
+* Both `.cpp` files are compiled at **warning level 3**, not the project's level
+  4. That is the level they were written and verified against. Raising it would
+   mean editing them, which would destroy the hash.
+* `src/vendor/` is untouched by any of this. If you are auditing the vendored
+  upstream diff, dark mode is not part of the answer.
 
 ## Keeping in sync
 

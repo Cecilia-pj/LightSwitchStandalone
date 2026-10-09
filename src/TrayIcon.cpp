@@ -3,6 +3,7 @@
 
 #include "L10n.h"
 #include "Logging.h"
+#include "dark/DarkApp.h"
 
 #include <shellapi.h>
 
@@ -215,6 +216,14 @@ UINT TrayIcon::ShowContextMenu(POINT screenPoint)
     AppendMenuW(menu, MF_STRING, CmdExit, L10n::T(Str::TrayExit));
 
     SetMenuDefaultItem(menu, CmdToggleNow, FALSE);
+
+    // The popup itself is drawn by the system from the process-wide app mode,
+    // so the only thing to do here is make sure that mode is current. It can be
+    // stale if settings.json was edited (or reloaded from the tray menu) after
+    // the last Apply. Conditional on purpose: this runs on every right-click,
+    // where an unconditional Apply - two rebuilt brushes and a full repaint of
+    // every child window - would be pure overhead.
+    DarkApp::ApplyIfNeeded(m_owner);
 
     // Required so the menu closes when the user clicks elsewhere.
     SetForegroundWindow(m_owner);

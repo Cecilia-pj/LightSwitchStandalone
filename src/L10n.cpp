@@ -59,6 +59,16 @@ constexpr Entry kStrings[] = {
     { Str::DialogButtonCancel, L"DialogButtonCancel", L"Cancel", L"取消" },
     { Str::LanguageAuto, L"LanguageAuto", L"Follow Windows", L"跟随 Windows" },
 
+    // ---- settings dialog: interface theme --------------------------------
+    // ThemeAuto reads the same as LanguageAuto, but keeps its own id: the two
+    // dropdowns are free to diverge later, and distinct ids keep the
+    // --dump-strings output readable.
+    { Str::DialogGroupTheme, L"DialogGroupTheme", L"Theme", L"界面主题" },
+    { Str::DialogLabelTheme, L"DialogLabelTheme", L"Theme:", L"主题：" },
+    { Str::ThemeAuto, L"ThemeAuto", L"Follow Windows", L"跟随 Windows" },
+    { Str::ThemeLight, L"ThemeLight", L"Light", L"浅色" },
+    { Str::ThemeDark, L"ThemeDark", L"Dark", L"深色" },
+
     // ---- schedule mode names --------------------------------------------
     { Str::ModeOff, L"ModeOff", L"Off", L"关闭" },
     { Str::ModeFixedHours, L"ModeFixedHours", L"Fixed hours", L"固定时间" },

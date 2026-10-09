@@ -188,6 +188,28 @@ ScheduleMode ScheduleModeFromString(const std::wstring& value)
     return ScheduleMode::Off;
 }
 
+std::wstring NormalizeUiTheme(const std::wstring& value)
+{
+    // Trim first: hand-edited JSON easily picks up a stray space, and the exact
+    // string is what ends up back in the file.
+    const size_t begin = value.find_first_not_of(L" \t\r\n");
+    if (begin == std::wstring::npos)
+        return L"auto";
+
+    const size_t end = value.find_last_not_of(L" \t\r\n");
+    const std::wstring trimmed = value.substr(begin, end - begin + 1);
+
+    if (_wcsicmp(trimmed.c_str(), L"light") == 0)
+        return L"light";
+    if (_wcsicmp(trimmed.c_str(), L"dark") == 0)
+        return L"dark";
+
+    // "auto" and everything unrecognised. Degrading to "auto" rather than to a
+    // pinned theme means a typo cannot leave the user stuck in the wrong theme
+    // with no obvious way back.
+    return L"auto";
+}
+
 SettingsStore& SettingsStore::Instance()
 {
     static SettingsStore instance;
@@ -273,6 +295,7 @@ std::string SettingsStore::Serialize(const Config& config) const
 
     root.set("startOnLogin", Wrap(json::Value(config.startOnLogin)));
     root.set("language", Wrap(json::Value(WideToUtf8(config.language))));
+    root.set("uiTheme", Wrap(json::Value(WideToUtf8(config.uiTheme))));
 
     return root.dump(2) + "\n";
 }
@@ -304,6 +327,10 @@ bool SettingsStore::Deserialize(const std::string& utf8, Config& config, std::st
     // as "zh-CN"; an unrecognised code degrades to "auto" rather than pinning
     // whatever the system happens to be today.
     loaded.language = L10n::Normalize(JsonGetStringWrapped(root, "language", loaded.language));
+
+    // Standalone extension, same reasoning: only "auto" / "light" / "dark" ever
+    // reach the rest of the program.
+    loaded.uiTheme = NormalizeUiTheme(JsonGetStringWrapped(root, "uiTheme", loaded.uiTheme));
 
     if (const json::Value* hotkeyEntry = root.find("toggle-theme-hotkey"); hotkeyEntry && hotkeyEntry->isObject())
     {

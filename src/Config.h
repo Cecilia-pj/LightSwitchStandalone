@@ -19,13 +19,19 @@
 //   "toggle-theme-hotkey": { "value": { "win": true, "ctrl": true, "alt": false,
 //                                       "shift": true, "code": 68 } },
 //   "startOnLogin":     { "value": false },    // standalone-only extension
-//   "language":         { "value": "auto" }    // standalone-only extension
+//   "language":         { "value": "auto" },   // standalone-only extension
+//   "uiTheme":          { "value": "auto" }    // standalone-only extension
 // }
 //
 // "language" accepts "auto" (follow the Windows UI language) or a concrete
 // code such as "en-US" / "zh-CN". It has no PowerToys counterpart, so a
 // PowerToys settings.json can still be copied over verbatim - the key simply
 // falls back to "auto".
+//
+// "uiTheme" accepts "auto" (follow the Windows app theme, AppsUseLightTheme),
+// "light" or "dark". It has no PowerToys counterpart either. Both keys are
+// additive: this program only ever drops keys it does not model, and the keys it
+// does model survive a round trip.
 #pragma once
 
 #include <string>
@@ -44,6 +50,12 @@ enum class ScheduleMode
 
 std::wstring ScheduleModeToString(ScheduleMode mode);
 ScheduleMode ScheduleModeFromString(const std::wstring& value);
+
+// Canonical form of a settings.json "uiTheme" value: "auto", "light" or "dark".
+// Case insensitive and whitespace tolerant. Anything unrecognised - including a
+// typo - becomes "auto", so a bad value degrades to following Windows instead of
+// pinning the interface to a theme the user did not ask for.
+std::wstring NormalizeUiTheme(const std::wstring& value);
 
 struct HotkeyConfig
 {
@@ -79,6 +91,12 @@ struct Config
     // Standalone-only: "auto" follows the Windows UI language, otherwise a
     // concrete code such as "en-US" or "zh-CN". See src/L10n.h.
     std::wstring language = L"auto";
+
+    // Standalone-only: interface theme for the settings dialog and the tray
+    // menu. "auto" follows the Windows app theme (AppsUseLightTheme, i.e. the
+    // same value Light Switch itself writes); "light" and "dark" pin it. See
+    // src/dark/DarkApp.h.
+    std::wstring uiTheme = L"auto";
 
     // Normalised copy with all times wrapped into [0, 1439] -- the scheduler
     // and the dialog should use these instead of the raw values.

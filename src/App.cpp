@@ -6,6 +6,7 @@
 #include "L10n.h"
 #include "Logging.h"
 #include "StateManager.h"
+#include "dark/DarkApp.h"
 #include "vendor/ThemeHelper.h"
 
 #include <shlobj.h>
@@ -334,7 +335,24 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
             LOG_INFO(L"[App] Windows display language changed; interface is now " << L10n::CurrentCode() << L".");
             UpdateTooltip();
         }
+
+        // "ImmersiveColorSet" is broadcast when the user switches Windows
+        // between its light and dark app theme. The settings dialog handles its
+        // own copy; this one matters because it is the only listener when no
+        // dialog is open, and the tray icon outlives every dialog. Conditional:
+        // when the interface is pinned, nothing about it changed.
+        if (DarkApp::IsFollowingSystem() && DarkApp::IsColorSchemeChange(lParam))
+        {
+            LOG_INFO(L"[App] Windows app theme changed; following it.");
+            DarkApp::ApplyIfNeeded(m_window);
+        }
         break;
+
+    // uxtheme reloaded its theme data (colour scheme change, high contrast
+    // toggle, a theme being applied). Same reasoning as above.
+    case WM_THEMECHANGED:
+        DarkApp::ApplyIfNeeded(m_window);
+        return 0;
 
     case WM_QUERYENDSESSION:
         return TRUE;
