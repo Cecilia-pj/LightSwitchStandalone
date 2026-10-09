@@ -413,6 +413,13 @@ from it. They are copied verbatim so that a hash can prove it:
 sha256sum src/dark/darkmode.h src/dark/darkmode.cpp src/dark/darkui.h src/dark/darkui.cpp
 ```
 
+Those four lines have to be stable, so `.gitattributes` pins them to `eol=lf`.
+Without that pin, `core.autocrlf=true` — the Windows default — would check them
+out with CRLF endings on a fresh clone and every hash would come out wrong, even
+though the files were fine in the repository. If you copy the four files by hand
+rather than through Git, make sure whatever tool you use does not rewrite their
+line endings, or the check will fail for the same reason.
+
 Both `.cpp` files are compiled at **warning level 3** rather than the project's
 level 4, because that is what they were written and verified against. Raising
 the level would mean editing them, which would destroy the only evidence that

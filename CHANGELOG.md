@@ -69,11 +69,21 @@ Windows app theme by default.
 
 ### Fixed
 
-* Nothing regressed from 1.1.0, so this section only records defects that were
-  found and fixed inside 1.2.0's own new code, during the screenshot review that
-  preceded the release. They never shipped.
+* Nothing regressed from 1.1.0, so this section records only defects found in
+  1.2.0's own new code and packaging, before the release.
+* `.gitattributes` did not pin the four vendored dark-mode files to LF. With
+  `* text=auto` and `core.autocrlf=true` — the Windows default — a fresh clone
+  checked `src/dark/darkmode.*` and `src/dark/darkui.*` out with CRLF endings, so
+  the `sha256sum` command in `README.md` and `UPSTREAM.md` failed on a freshly
+  cloned tree even though the files were correct in the repository. The four files
+  are now pinned `eol=lf`, which is what makes the published provenance check
+  reproducible. A `git add --renormalize .` pass confirmed no other file in the
+  repository changed, so nothing else is affected.
 
 ### Notes
+
+* The two defects below were found and fixed inside 1.2.0's own new code during
+  the screenshot review that preceded the release. Neither ever shipped.
 
 * A `HKM_GETHOTKEY` reading mistake was caught by the screenshot pass before
   release: the virtual key is in the **low** byte and the modifier flags in the

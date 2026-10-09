@@ -97,6 +97,12 @@ the skill rather than against a local fork. Verify with:
 sha256sum src/dark/darkmode.h src/dark/darkmode.cpp src/dark/darkui.h src/dark/darkui.cpp
 ```
 
+Those hashes only mean something if the files arrive byte for byte, so
+`.gitattributes` pins these four paths to `eol=lf`. Left to `* text=auto` and
+`core.autocrlf=true` — the Windows default — a clone would check them out with
+CRLF endings and every published hash would fail, even though the repository copy
+was correct.
+
 | File | Lines | Role |
 |---|---|---|
 | `src/dark/darkmode.h` / `.cpp` | ~105 / ~350 | System layer: DWM chrome, the undocumented `uxtheme` ordinals, system-theme detection, palette, preference persistence. No control code. |
