@@ -15,6 +15,20 @@
 *.bat       text eol=crlf
 *.vcxproj   text eol=crlf
 
+# The four vendored dark-mode files are pinned to LF.
+#
+# They were copied byte-for-byte out of the win32-dark-mode skill, and UPSTREAM.md
+# plus README.md publish their sha256 as the only evidence that they are
+# unmodified. With "* text=auto" and core.autocrlf=true, a clone on Windows would
+# check them out with CRLF and every published hash would fail -- which is exactly
+# the check the documentation tells the reader to run. Pinning them to LF makes
+# the hashes reproducible on every platform. This is also why they are compiled at
+# /W3: editing them to satisfy /W4 would destroy that evidence.
+src/dark/darkmode.h    text eol=lf
+src/dark/darkmode.cpp  text eol=lf
+src/dark/darkui.h      text eol=lf
+src/dark/darkui.cpp    text eol=lf
+
 # Binary.
 *.zip       binary
 *.png       binary
