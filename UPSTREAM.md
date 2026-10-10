@@ -73,6 +73,7 @@ above (and therefore the output of `tools/fetch_upstream.ps1`) is unaffected.
 | `"language"` key in `settings.json` | `src/Config.{h,cpp}` | An additive extension. Upstream never reads it, and the app only drops *unknown* keys it does not model — `language` is modelled, so it survives a round trip. |
 | `"startOnLogin"` key in `settings.json` | `src/Config.{h,cpp}` | Same story; see the "Intentionally different" table in `README.md`. |
 | `"uiTheme"` key in `settings.json` | `src/Config.{h,cpp}` | Additive, same as the two above. Note the distinction from the scheduler: `uiTheme` only decides how *this application's* windows are drawn. Nothing in `src/vendor/` reads or writes it. |
+| `"trayClickTogglesTheme"` key in `settings.json` | `src/Config.{h,cpp}`, `src/App.cpp` | Additive. Gates one gesture (a single left click on the tray icon) and nothing else. Upstream has no tray icon of its own — the module is loaded by the PowerToys Runner, which owns the tray — so there is no upstream behaviour to stay compatible with here. See the "Trigger conditions" table in `README.md`. |
 
 If upstream ever grows a localisation mechanism of its own, translate the
 concept rather than the identifier names: the on-disk contract (`settings.json`

@@ -102,6 +102,7 @@ constexpr ControlText kControlTexts[] = {
     { IDC_STATIC_GROUP_SHORTCUT, Str::DialogGroupShortcut },
     { IDC_CHK_WIN, Str::DialogCheckWinKey },
     { IDC_STATIC_HINT_HOTKEY, Str::DialogHotkeyHint },
+    { IDC_CHK_TRAY_CLICK, Str::DialogCheckTrayClick },
     { IDC_STATIC_GROUP_STARTUP, Str::DialogGroupStartup },
     { IDC_CHK_STARTUP, Str::DialogCheckStartup },
     { IDC_STATIC_GROUP_LANGUAGE, Str::DialogGroupLanguage },
@@ -720,6 +721,7 @@ void Populate(HWND dialog, const Config& config)
 
     PopulateLanguageCombo(dialog, config.language);
     PopulateThemeCombo(dialog, config.uiTheme);
+    CheckDlgButton(dialog, IDC_CHK_TRAY_CLICK, config.trayClickTogglesTheme ? BST_CHECKED : BST_UNCHECKED);
 
     RefreshEnabledState(dialog);
     RefreshSunInfo(dialog);
@@ -798,6 +800,7 @@ bool Harvest(HWND dialog, Config& config)
     result.startOnLogin = IsDlgButtonChecked(dialog, IDC_CHK_STARTUP) == BST_CHECKED;
     result.language = LanguageFromCombo(dialog);
     result.uiTheme = ThemeFromCombo(dialog);
+    result.trayClickTogglesTheme = IsDlgButtonChecked(dialog, IDC_CHK_TRAY_CLICK) == BST_CHECKED;
 
     config = result;
     return true;

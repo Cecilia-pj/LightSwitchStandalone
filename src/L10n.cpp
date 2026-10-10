@@ -44,11 +44,21 @@ constexpr Entry kStrings[] = {
       L"偏移可以是负数。选择「日出到日落」后，上面的时间会被忽略。" },
     { Str::DialogGroupLanguage, L"DialogGroupLanguage", L"Interface language", L"界面语言" },
     { Str::DialogLabelLanguage, L"DialogLabelLanguage", L"Language:", L"语言：" },
-    { Str::DialogGroupShortcut, L"DialogGroupShortcut", L"Shortcut", L"快捷键" },
+    // Was "Shortcut": the group now also holds the tray-click option, which is
+    // not a keyboard shortcut, so the caption covers both gestures instead.
+    { Str::DialogGroupShortcut, L"DialogGroupShortcut", L"Toggle shortcuts", L"切换方式" },
     { Str::DialogCheckWinKey, L"DialogCheckWinKey", L"Include Win key", L"包含 Win 键" },
     { Str::DialogHotkeyHint, L"DialogHotkeyHint",
       L"Win+ combinations are reserved by Windows; a keyboard hook is used instead.",
       L"Win+ 组合键由 Windows 保留；此时改用键盘钩子。" },
+    // Kept short on purpose: the checkbox shares a row with the hint above and
+    // sits in a 176 dlu column that FitLabels() cannot widen (it only rescues
+    // static controls), so a long sentence would be clipped in one language.
+    // Says "Left click" so it cannot be confused with the right-click menu,
+    // which keeps its own "Toggle now" entry either way.
+    { Str::DialogCheckTrayClick, L"DialogCheckTrayClick",
+      L"Left click on tray icon toggles theme",
+      L"单击托盘图标切换主题" },
     { Str::DialogGroupStartup, L"DialogGroupStartup", L"Startup", L"开机启动" },
     { Str::DialogCheckStartup, L"DialogCheckStartup", L"Start automatically when I sign in", L"登录时自动启动" },
     { Str::DialogButtonToggleNow, L"DialogButtonToggleNow", L"Toggle now", L"立即切换" },

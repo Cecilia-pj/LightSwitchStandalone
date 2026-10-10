@@ -7,6 +7,61 @@ versioning follows the upstream PowerToys Light Switch module's schema — the
 on-disk `settings.json` contract is versioned separately from this file and is
 only ever extended additively.
 
+## [1.3.0] - 2026-10-10
+
+A tray icon left click no longer toggles the theme unless you ask for it, so a
+touch screen cannot change the theme by accident.
+
+### Added
+
+* `"trayClickTogglesTheme"` key in `settings.json`, defaulting to **`false`**.
+  When it is false a single left click on the tray icon does nothing at all, and
+  the log records `Left click ignored; "trayClickTogglesTheme" is off.` at
+  `DEBUG` level so the silence is diagnosable rather than mysterious.
+* A *Left click on tray icon toggles theme* checkbox in the settings dialog
+  (`单击托盘图标切换主题` in Chinese), in the group that holds the other way to
+  trigger a toggle. Off by default; `Restore defaults` unticks it.
+
+### Changed
+
+* **A single left click on the tray icon no longer toggles the theme by
+  default.** This is a deliberate behaviour change, not a regression: a tap on a
+  touch screen arrives as the same `WM_LBUTTONUP` a mouse click produces, so the
+  old default meant any finger brushing past the icon flipped the Windows theme
+  instantly, with no confirmation and no undo.
+  The other three ways to toggle are unaffected and always available: the global
+  hotkey, *Toggle theme now* in the tray context menu, and *Toggle now* in the
+  settings dialog. Double-clicking the icon still opens the settings dialog, and
+  right-clicking still opens the menu.
+* `DialogGroupShortcut` now reads *Toggle shortcuts* (was *Shortcut*) /
+  *切换方式* (was *快捷键*). The group holds the tray-click option as well as the
+  hotkey, so the old caption no longer described its contents.
+
+### Fixed
+
+* The tray icon's click behaviour was undocumented: `README.md` described the
+  context menu and the double click but never mentioned that a single left click
+  toggled the theme, which is the one gesture that could surprise a user. The
+  table in *Trigger conditions* now covers every gesture, including the two that
+  the shell delivers for touch.
+
+### Notes
+
+* **No press-duration logic exists, and none was removed.** There is no
+  long-press gesture anywhere in `src/`: no `SetTimer`, no `WM_LBUTTONDOWN`
+  handler on the tray path, no `GetMessageTime`. The gesture being guarded is a
+  plain single click. On a touch screen Windows maps a tap to `WM_LBUTTONUP` and
+  a press-and-hold to `WM_CONTEXTMENU`, so press-and-hold opens the menu and
+  never toggled the theme even before this change.
+* Settings written by 1.2.0 or earlier have no `trayClickTogglesTheme` key, and
+  the missing key falls back to `false`. Upgrading therefore never silently
+  re-enables the gesture.
+* The checkbox had to go into the *Toggle shortcuts* group rather than a group of
+  its own. The dialog is 397 dlu tall, which is already 1040 px at 125 % scaling
+  on a 1080p screen against a 1020 px work area; adding a group pushed the button
+  row to 1048 px, behind the taskbar and unclickable. Reusing space that group
+  already had keeps the geometry identical to 1.2.0.
+
 ## [1.2.0] - 2026-10-09
 
 Dark-mode interface for the settings dialog and the tray menu, following the

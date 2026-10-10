@@ -32,7 +32,9 @@ bin/Release/LightSwitchStandalone.exe   ~520 KB, static CRT
 * Global toggle shortcut (default `Ctrl+Win+Shift+D`) that flips the theme by
   hand and suspends automatic switching until the next schedule boundary.
 * Tray icon with a context menu; native Win32 settings dialog; optional
-  "start when I sign in"; single-instance enforcement.
+  "start when I sign in"; single-instance enforcement. A single left click on the
+  icon does **not** toggle the theme unless you turn that on (see *Trigger
+  conditions*), so a touch screen cannot flip the theme by accident.
 * Localised interface — **English** and **简体中文** — that follows the Windows
   display language by default and can be overridden in the settings dialog.
   Switching takes effect immediately, without a restart.
@@ -127,7 +129,28 @@ same ids in the same order (see *Localisation* below).
 Tray menu: *Toggle theme now*, *Settings…*, *Reload settings from disk*, *Open
 settings folder*, *Restart Explorer (refresh shell)*, *View log*, *Exit*. The
 menu is rebuilt on every right-click, so it always shows the active language.
-Double-clicking the tray icon opens the settings dialog.
+
+### Trigger conditions
+
+Every gesture the tray icon responds to, and what it does. The "shell sends"
+column matters on a touch screen: Windows does not have separate tap messages,
+so a tap is a mouse click as far as the application is concerned.
+
+| Gesture | Shell sends | What happens | Toggles the theme? |
+|---|---|---|---|
+| Single left click — **a tap on a touch screen** | `WM_LBUTTONUP` | Nothing, unless `trayClickTogglesTheme` is `true`; either way the reason is written to the log | **Only if enabled** (off by default) |
+| Double click | `WM_LBUTTONDBLCLK` plus two `WM_LBUTTONUP` | Opens the settings dialog. The two `WM_LBUTTONUP` messages cancel each other out, so this never flips the theme | No |
+| Right click | `WM_RBUTTONUP` / `WM_CONTEXTMENU` | Opens the context menu, which has its own *Toggle theme now* entry | No |
+| **Press and hold on a touch screen** | `WM_CONTEXTMENU` | Opens the context menu. This is why a long press has never toggled the theme | No |
+| Global hotkey, `Ctrl+Win+Shift+D` by default | `WM_HOTKEY` | Toggles immediately | Yes |
+| *Toggle now* in the settings dialog | — | Toggles immediately | Yes |
+
+So there is no press-duration logic anywhere in the program: a long press opens
+the menu, and the gesture that used to flip the theme by accident was a plain
+single click. `trayClickTogglesTheme` (default `false`) gates that one gesture
+and nothing else. If you want the click back, set the checkbox in *Toggle
+shortcuts* or edit `settings.json`; the hotkey and both *Toggle now* entries are
+always available either way.
 
 ### Files it creates
 
@@ -156,14 +179,16 @@ can be copied over verbatim for comparison.
   "toggle-theme-hotkey": { "value": { "win": true, "ctrl": true, "alt": false, "shift": true, "code": 68 } },
   "startOnLogin":     { "value": false },
   "language":         { "value": "auto" },
-  "uiTheme":          { "value": "auto" }
+  "uiTheme":          { "value": "auto" },
+  "trayClickTogglesTheme": { "value": false }
 }
 ```
 
 `scheduleMode` accepts `"Off"`, `"FixedHours"`, `"SunsetToSunrise"`,
 `"FollowNightLight"`. `lightTime` / `darkTime` are minutes since midnight.
-`code` is a virtual-key code (`68` = `D`). `startOnLogin`, `language` and
-`uiTheme` are the only standalone-specific extensions.
+`code` is a virtual-key code (`68` = `D`). `startOnLogin`, `language`,
+`uiTheme` and `trayClickTogglesTheme` are the only standalone-specific
+extensions.
 
 `language` accepts `"auto"` (follow the Windows display language), `"en-US"` /
 `"en"`, or `"zh-CN"` / `"zh"` / `"zh-Hans"`, case-insensitively. The value is
@@ -185,6 +210,14 @@ interface to a theme nobody asked for.
 > schedule, while `uiTheme` only *reads* it to decide how to draw this
 > application's own windows. Setting `uiTheme` never changes the Windows theme,
 > and the scheduler never reads `uiTheme`.
+
+`trayClickTogglesTheme` is a boolean and defaults to **`false`**. It controls one
+gesture only: a single left click on the tray icon. It is off by default because
+a tap on a touch screen arrives as the same message a mouse click does, so
+without the guard a finger brushing past the icon flips the theme of the whole
+machine instantly — no confirmation, no undo. A settings.json written by 1.2.0 or
+earlier has no such key, and the missing key falls back to `false`, so upgrading
+never silently re-enables the gesture.
 
 The file watcher compares content, so a write from the app itself never causes a
 reload loop. A malformed file is reported in the log and ignored — the previous
@@ -587,6 +620,28 @@ LightSwitchStandalone.exe --help        显示以上说明
 6. 深色是**全深色**：标题栏、分组框、复选框、下拉列表（展开的列表也是深的）、
    时间框和它的上下箭头、快捷键框都处理过，没有白块。
    只有系统自己弹的消息框（比如坐标填错的警告）着色改不了，那是系统画的。
+
+### 单击托盘图标会不会切换主题
+
+1. **默认不会。** 程序里**没有任何「长按」判断**——托盘图标只有单击、双击、右键
+   三种手势。会和主题有关的是**单击**，而触摸屏上「轻点」和鼠标单击发的是同一条
+   消息（`WM_LBUTTONUP`），所以手指擦过图标就会把整台机器的主题翻掉。为了挡住
+   这个，默认把单击切换关掉了。
+2. 想恢复单击切换：打开设置对话框，在「切换方式」分组里勾上
+   **「单击托盘图标切换主题」**，再点「保存」。也可以直接写 `settings.json`：
+
+   ```json
+   { "trayClickTogglesTheme": { "value": true } }
+   ```
+
+3. 关掉后**另外三种切换方式不受影响**：全局快捷键、右键菜单里的「立即切换主题」、
+   对话框里的「立即切换」。双击图标仍然打开设置窗口，右键仍然弹菜单。
+4. 触摸屏上**长按等于右键**，弹出的是菜单，本来就从来不会切换主题。
+5. 关掉时单击没反应是**故意的**，日志里会留一行
+   `Left click ignored; "trayClickTogglesTheme" is off.`，免得你以为程序坏了。
+   完整的手势对照表见英文部分的 *Trigger conditions*。
+6. 旧版本（1.2.0 及更早）的 `settings.json` 没有这个键；读不到就用默认值
+   `false`，所以升级不会悄悄把单击切换重新打开。
 
 ### 文件放在哪
 

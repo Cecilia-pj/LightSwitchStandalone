@@ -296,7 +296,11 @@ std::string SettingsStore::Serialize(const Config& config) const
     root.set("startOnLogin", Wrap(json::Value(config.startOnLogin)));
     root.set("language", Wrap(json::Value(WideToUtf8(config.language))));
     root.set("uiTheme", Wrap(json::Value(WideToUtf8(config.uiTheme))));
+    root.set("trayClickTogglesTheme", Wrap(json::Value(config.trayClickTogglesTheme)));
 
+    // Key order here is irrelevant: json::Value stores objects in a std::map, so
+    // the file always comes out alphabetically sorted regardless of the order
+    // these set() calls run in.
     return root.dump(2) + "\n";
 }
 
@@ -331,6 +335,12 @@ bool SettingsStore::Deserialize(const std::string& utf8, Config& config, std::st
     // Standalone extension, same reasoning: only "auto" / "light" / "dark" ever
     // reach the rest of the program.
     loaded.uiTheme = NormalizeUiTheme(JsonGetStringWrapped(root, "uiTheme", loaded.uiTheme));
+
+    // Standalone extension. A settings.json written by 1.2.0 or earlier has no
+    // such key, and the fallback is the struct default - which is false, i.e.
+    // the safe value. An upgrade therefore never silently turns the touch-unfriendly
+    // gesture back on.
+    loaded.trayClickTogglesTheme = JsonGetBoolWrapped(root, "trayClickTogglesTheme", loaded.trayClickTogglesTheme);
 
     if (const json::Value* hotkeyEntry = root.find("toggle-theme-hotkey"); hotkeyEntry && hotkeyEntry->isObject())
     {

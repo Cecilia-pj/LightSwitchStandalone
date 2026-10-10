@@ -20,7 +20,8 @@
 //                                       "shift": true, "code": 68 } },
 //   "startOnLogin":     { "value": false },    // standalone-only extension
 //   "language":         { "value": "auto" },   // standalone-only extension
-//   "uiTheme":          { "value": "auto" }    // standalone-only extension
+//   "uiTheme":          { "value": "auto" },   // standalone-only extension
+//   "trayClickTogglesTheme": { "value": false } // standalone-only extension
 // }
 //
 // "language" accepts "auto" (follow the Windows UI language) or a concrete
@@ -32,6 +33,13 @@
 // "light" or "dark". It has no PowerToys counterpart either. Both keys are
 // additive: this program only ever drops keys it does not model, and the keys it
 // does model survive a round trip.
+//
+// "trayClickTogglesTheme" defaults to false, and that default is deliberate: a
+// single left click on the tray icon is also what a tap produces on a touch
+// screen, so an accidental brush across the icon would otherwise flip the whole
+// Windows theme with no confirmation and no undo. Set it to true to get the
+// click-to-toggle gesture back. Note this is a plain single click, not a long
+// press - the program has no press-duration logic anywhere.
 #pragma once
 
 #include <string>
@@ -97,6 +105,18 @@ struct Config
     // same value Light Switch itself writes); "light" and "dark" pin it. See
     // src/dark/DarkApp.h.
     std::wstring uiTheme = L"auto";
+
+    // Standalone-only: whether a single left click on the tray icon toggles the
+    // theme. Off by default, because a screen tap arrives as the same message a
+    // mouse click does (WM_LBUTTONUP), so any touch user who brushes past the
+    // icon would otherwise change the theme of the whole machine by accident.
+    //
+    // When this is false a single click does nothing at all - deliberately, so
+    // that a tap cannot trigger anything. The other three ways to toggle are
+    // unaffected: the global hotkey, "Toggle now" in the tray context menu, and
+    // the button of the same name in the settings dialog. Double-clicking the
+    // icon still opens the settings dialog.
+    bool trayClickTogglesTheme = false;
 
     // Normalised copy with all times wrapped into [0, 1439] -- the scheduler
     // and the dialog should use these instead of the raw values.

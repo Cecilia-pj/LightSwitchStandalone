@@ -394,7 +394,24 @@ void App::HandleTrayCallback(LPARAM lParam)
         break;
 
     case WM_LBUTTONUP:
-        OnToggleNow();
+        // A single left click is opt-in. On a touch screen a tap arrives as
+        // exactly this message, so the default (settings.json
+        // "trayClickTogglesTheme": false) is to do nothing here rather than
+        // risk flipping the theme of the whole machine because a finger
+        // brushed past the icon. The other three ways to toggle are
+        // unaffected - the hotkey, the menu's "Toggle now" and the button of
+        // the same name - and a double click still opens the settings dialog.
+        if (SettingsStore::Instance().Get().trayClickTogglesTheme)
+        {
+            OnToggleNow();
+        }
+        else
+        {
+            // DEBUG, not INFO: this fires on every stray tap, and someone
+            // wondering why clicking the icon does nothing needs the
+            // breadcrumb without the log filling up.
+            LOG_DEBUG(L"[Tray] Left click ignored; \"trayClickTogglesTheme\" is off.");
+        }
         break;
 
     case WM_RBUTTONUP:

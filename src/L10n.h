@@ -59,6 +59,7 @@ enum class Str
     DialogGroupShortcut,
     DialogCheckWinKey,
     DialogHotkeyHint,
+    DialogCheckTrayClick,
     DialogGroupStartup,
     DialogCheckStartup,
     DialogButtonToggleNow,

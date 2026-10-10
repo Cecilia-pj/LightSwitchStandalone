@@ -33,6 +33,7 @@
 
 // ---- interface theme ------------------------------------------------------
 #define IDC_CMB_THEME 1038
+#define IDC_CHK_TRAY_CLICK 1041
 
 // ---- translated labels / group boxes --------------------------------------
 #define IDC_STATIC_GROUP_SCHEDULE 1022

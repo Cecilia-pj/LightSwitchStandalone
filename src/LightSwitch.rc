@@ -68,11 +68,24 @@ BEGIN
     EDITTEXT        IDC_EDT_SUNSET_OFF, 246, 166, 44, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     LTEXT           "", IDC_STATIC_HINT_OFFSETS, 14, 184, 314, 16   // offsets hint
 
-    // ---- Shortcut / 快捷键 -----------------------------------------------
+    // ---- How the toggle is triggered / 切换方式 ----------------------------
+    // Holds both gestures that flip the theme: the hotkey, and the tray icon
+    // click. The checkbox sits in the left column under "Include Win key", in
+    // space that group already had.
+    //
+    // It is here rather than in a group of its own because vertical space is
+    // genuinely scarce: this dialog is 397 dlu, which is already 1040 px at
+    // 125% scaling on a 1080p screen, and the work area is only 1020 px. A new
+    // 32-dlu group pushed the button row to 1048 px - behind the taskbar and
+    // unreachable. Anything added here has to cost no height.
     GROUPBOX        "", IDC_STATIC_GROUP_SHORTCUT, 7, 208, 326, 44
     CONTROL         "", IDC_CHK_WIN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 223, 74, 10
     CONTROL         "", IDC_HOTKEY, "msctls_hotkey32", WS_BORDER | WS_TABSTOP, 96, 221, 92, 14
     LTEXT           "", IDC_STATIC_HINT_HOTKEY, 194, 220, 138, 26  // Win-key hint
+    // 176 dlu is the whole free column, and FitLabels() only rescues static
+    // controls, so a translated button label cannot be widened at runtime -
+    // hence the deliberately short English wording.
+    CONTROL         "", IDC_CHK_TRAY_CLICK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 238, 176, 10
 
     // ---- Startup / 开机启动 ----------------------------------------------
     GROUPBOX        "", IDC_STATIC_GROUP_STARTUP, 7, 257, 326, 39
@@ -92,7 +105,7 @@ BEGIN
     // ---- Button row (re-laid out at runtime) ------------------------------
     // Only the x coordinates are recomputed (LayoutButtonRow packs them to the
     // measured label widths); the y below is what the dialog will use, so the row
-    // has to be moved down by hand whenever a group is inserted above it.
+    // has to be moved down by hand whenever a group is inserted or grown above it.
     PUSHBUTTON      "", IDC_BTN_TOGGLE, 7, 376, 50, 14
     PUSHBUTTON      "", IDC_BTN_RESTART_EXPLORER, 62, 376, 78, 14
     PUSHBUTTON      "", IDC_BTN_OPEN_FOLDER, 145, 376, 56, 14
@@ -105,8 +118,8 @@ END
 // Version information
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,2,0,0
- PRODUCTVERSION 1,2,0,0
+ FILEVERSION 1,3,0,0
+ PRODUCTVERSION 1,3,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -119,12 +132,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "LightSwitch Standalone contributors\0"
             VALUE "FileDescription", "Light Switch Standalone\0"
-            VALUE "FileVersion", "1.2.0.0\0"
+            VALUE "FileVersion", "1.3.0.0\0"
             VALUE "InternalName", "LightSwitchStandalone\0"
             VALUE "LegalCopyright", "Portions Copyright (c) Microsoft Corporation (MIT).\0"
             VALUE "OriginalFilename", "LightSwitchStandalone.exe\0"
             VALUE "ProductName", "Light Switch Standalone\0"
-            VALUE "ProductVersion", "1.2.0.0\0"
+            VALUE "ProductVersion", "1.3.0.0\0"
         END
     END
     BLOCK "VarFileInfo"
