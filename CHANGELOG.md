@@ -7,6 +7,42 @@ versioning follows the upstream PowerToys Light Switch module's schema — the
 on-disk `settings.json` contract is versioned separately from this file and is
 only ever extended additively.
 
+## [1.3.1] - 2026-10-10
+
+The tray icon no longer disappears when `explorer.exe` restarts.
+
+### Fixed
+
+* **The tray icon comes back after an Explorer restart instead of staying gone.**
+  The notification area belongs to `explorer.exe`, so replacing that process
+  takes every icon in it; Windows keeps no record of who registered what and
+  never asks anyone to register again, so the icon used to be lost until the
+  program itself was restarted. It now listens for the shell's `TaskbarCreated`
+  broadcast and registers itself again, tooltip included. That covers all three
+  ways the shell is replaced: *Restart Explorer* in the tray menu, the button of
+  the same name in the settings dialog, and an `explorer.exe` that crashed or was
+  killed from outside.
+* *Restart Explorer*, the program's own path, no longer depends on that broadcast
+  arriving. It terminates explorer, waits, then starts a new one, with the UI
+  thread parked throughout; Winlogon's `AutoRestartShell` (on by default) can
+  revive the shell during that wait, and the broadcast is then sent to a thread
+  that is not pumping messages and is dropped. A bounded retry timer covers that
+  ordering.
+* A **repeated** registration request is no longer reported as a failure.
+  `NIM_ADD` is refused when the shell already holds an icon for the same
+  `(hWnd, uID)`, and one shell restart can produce two attempts — the broadcast
+  and the retry timer react to the same event. That used to end in ten refused
+  attempts and `The tray icon could not be registered again after 10 attempts;
+  restart the program to get it back.`, logged at `ERROR`, while the icon was in
+  fact on screen. `ReAdd()` now falls back to `NIM_MODIFY`, which only succeeds if
+  the shell really does hold the icon, and reports
+  `This shell already had the icon; refreshed it instead.`
+
+### Notes
+
+* No `settings.json` change. The key set is identical to 1.3.0's, so nothing has
+  to be migrated.
+
 ## [1.3.0] - 2026-10-10
 
 A tray icon left click no longer toggles the theme unless you ask for it, so a

@@ -125,42 +125,115 @@ HICON TrayIcon::CreateIcon()
     return icon;
 }
 
-bool TrayIcon::Add(HWND owner, const std::wstring& tooltip)
+bool TrayIcon::EnsureIcon()
 {
-    m_owner = owner;
+    if (m_icon)
+        return true;
 
-    if (!m_icon)
-    {
-        m_icon = CreateIcon();
-        if (!m_icon)
-        {
-            LOG_ERROR(L"[Tray] Could not create the tray icon.");
-            return false;
-        }
-    }
+    m_icon = CreateIcon();
+    return m_icon != nullptr;
+}
 
+bool TrayIcon::Register()
+{
     NOTIFYICONDATAW data{};
     data.cbSize = sizeof(data);
-    data.hWnd = owner;
+    data.hWnd = m_owner;
+    data.uID = kNotifyId;
+    data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
+    data.uCallbackMessage = kCallbackMessage;
+    data.hIcon = m_icon;
+    wcsncpy_s(data.szTip, m_tooltip.c_str(), _TRUNCATE);
+
+    if (!Shell_NotifyIconW(NIM_ADD, &data))
+        return false;
+
+    // Opt into the modern behaviour so the tooltip uses the current shell style.
+    // The shell wants this after every add, not just the first one.
+    data.uVersion = NOTIFYICON_VERSION_4;
+    Shell_NotifyIconW(NIM_SETVERSION, &data);
+
+    m_added = true;
+    return true;
+}
+
+bool TrayIcon::Modify(const std::wstring& tooltip)
+{
+    NOTIFYICONDATAW data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = m_owner;
     data.uID = kNotifyId;
     data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = kCallbackMessage;
     data.hIcon = m_icon;
     wcsncpy_s(data.szTip, tooltip.c_str(), _TRUNCATE);
 
-    if (!Shell_NotifyIconW(NIM_ADD, &data))
+    return Shell_NotifyIconW(NIM_MODIFY, &data) != FALSE;
+}
+
+bool TrayIcon::Add(HWND owner, const std::wstring& tooltip)
+{
+    m_owner = owner;
+    // Recorded before the call, not after: a failed Add() is retried by App,
+    // and the retry needs a tooltip to hand to the shell either way.
+    m_tooltip = tooltip;
+
+    if (!EnsureIcon())
+    {
+        LOG_ERROR(L"[Tray] Could not create the tray icon.");
+        return false;
+    }
+
+    if (!Register())
     {
         LOG_ERROR(L"[Tray] Shell_NotifyIcon(NIM_ADD) failed.");
         return false;
     }
 
-    // Opt into the modern behaviour so the tooltip uses the current shell style.
-    data.uVersion = NOTIFYICON_VERSION_4;
-    Shell_NotifyIconW(NIM_SETVERSION, &data);
-
-    m_added = true;
     LOG_INFO(L"[Tray] Icon added.");
     return true;
+}
+
+bool TrayIcon::ReAdd()
+{
+    if (!m_owner)
+        return false;
+
+    // The shell that owned the notification area is gone, so the icon went with
+    // it. Clearing the flag is what makes the call below issue a full NIM_ADD
+    // instead of trusting a registration that no longer exists, and it keeps
+    // m_added honest for the NIM_DELETE in Remove().
+    m_added = false;
+
+    if (!EnsureIcon())
+    {
+        LOG_ERROR(L"[Tray] Could not create the tray icon.");
+        return false;
+    }
+
+    if (Register())
+    {
+        LOG_INFO(L"[Tray] Icon added.");
+        return true;
+    }
+
+    // A refused NIM_ADD does not only mean "shell not ready yet". The shell also
+    // refuses it when it already holds an icon for this (hWnd, uID) - which is
+    // what a redundant re-add looks like, and one shell restart can very well
+    // produce two of those, because both the TaskbarCreated broadcast and the
+    // timer behind this program's own Restart Explorer react to it. In that case
+    // the icon is already in the tray and all that is left to do is put the
+    // current tooltip back. NIM_MODIFY only succeeds when the shell really does
+    // have the icon, so it cannot be mistaken for a shell that is still starting
+    // up: there it fails too, and the caller retries.
+    if (Modify(m_tooltip))
+    {
+        m_added = true;
+        LOG_INFO(L"[Tray] This shell already had the icon; refreshed it instead.");
+        return true;
+    }
+
+    return false;
 }
 
 void TrayIcon::Remove()
@@ -187,13 +260,10 @@ void TrayIcon::SetTooltip(const std::wstring& tooltip)
     if (!m_added)
         return;
 
-    NOTIFYICONDATAW data{};
-    data.cbSize = sizeof(data);
-    data.hWnd = m_owner;
-    data.uID = kNotifyId;
-    data.uFlags = NIF_TIP | NIF_SHOWTIP;
-    wcsncpy_s(data.szTip, tooltip.c_str(), _TRUNCATE);
-    Shell_NotifyIconW(NIM_MODIFY, &data);
+    // Kept so a later shell restart restores the tip that was actually showing,
+    // not the product name from startup.
+    m_tooltip = tooltip;
+    Modify(tooltip);
 }
 
 UINT TrayIcon::ShowContextMenu(POINT screenPoint)

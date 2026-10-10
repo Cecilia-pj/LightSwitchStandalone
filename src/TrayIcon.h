@@ -37,6 +37,14 @@ public:
     TrayIcon& operator=(const TrayIcon&) = delete;
 
     bool Add(HWND owner, const std::wstring& tooltip);
+
+    // Puts the icon back after the shell restarted. The notification area
+    // belongs to explorer.exe and has no memory of who registered what, so
+    // every application has to re-register itself; nothing is restored for us.
+    // Safe to call when the icon is already present - NIM_ADD with the same
+    // (hWnd, uID) updates the existing entry rather than adding a second one.
+    bool ReAdd();
+
     void Remove();
     void SetTooltip(const std::wstring& tooltip);
 
@@ -47,9 +55,26 @@ public:
     static HICON CreateIcon();
 
 private:
+    // Creates m_icon on first use. False only if GDI refused to make one.
+    bool EnsureIcon();
+
+    // One NIM_ADD followed by the NIM_SETVERSION the shell requires after every
+    // add. Silent about failures: the caller decides whether a refusal is fatal
+    // (Add, at startup) or expected (ReAdd, when the shell already has the icon).
+    bool Register();
+
+    // One NIM_MODIFY carrying the icon, the callback message and the tooltip.
+    // Returns false when the shell holds no icon for this (hWnd, uID), which is
+    // also how ReAdd() tells "already registered" from "shell not ready yet".
+    bool Modify(const std::wstring& tooltip);
+
     HWND m_owner = nullptr;
     HICON m_icon = nullptr;
     bool m_added = false;
+
+    // Remembered so ReAdd() can restore the tooltip too. The shell keeps the
+    // tip it was last given, and that copy dies with the shell.
+    std::wstring m_tooltip;
 };
 
 } // namespace ls

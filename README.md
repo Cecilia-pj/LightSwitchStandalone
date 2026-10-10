@@ -34,7 +34,9 @@ bin/Release/LightSwitchStandalone.exe   ~520 KB, static CRT
 * Tray icon with a context menu; native Win32 settings dialog; optional
   "start when I sign in"; single-instance enforcement. A single left click on the
   icon does **not** toggle the theme unless you turn that on (see *Trigger
-  conditions*), so a touch screen cannot flip the theme by accident.
+  conditions*), so a touch screen cannot flip the theme by accident. The icon
+  registers itself again when Windows Explorer restarts (see *Explorer
+  restarts*), including through this program's own *Restart Explorer*.
 * Localised interface — **English** and **简体中文** — that follows the Windows
   display language by default and can be overridden in the settings dialog.
   Switching takes effect immediately, without a restart.
@@ -151,6 +153,27 @@ single click. `trayClickTogglesTheme` (default `false`) gates that one gesture
 and nothing else. If you want the click back, set the checkbox in *Toggle
 shortcuts* or edit `settings.json`; the hotkey and both *Toggle now* entries are
 always available either way.
+
+### Explorer restarts
+
+The notification area is owned by `explorer.exe`, so replacing that process takes
+every icon in it. Windows keeps no record of who registered what and never asks
+anyone to register again: an application that does nothing loses its icon until
+it is restarted itself. This one listens for the shell's `TaskbarCreated`
+broadcast and registers the icon again, tooltip included.
+
+That covers all three ways the shell gets replaced — *Restart Explorer* in the
+tray menu, the button of the same name in the settings dialog, and an
+`explorer.exe` that crashed or was killed from outside.
+
+For its own restart the program does not depend on the broadcast alone. It kills
+explorer, waits, then starts a new one, and the UI thread is parked for that
+whole stretch; Winlogon's `AutoRestartShell` (on by default, under
+`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon`) can bring the shell
+back during that wait, in which case the broadcast is sent to a thread that is
+not pumping messages and is lost. A bounded retry timer covers that ordering. If
+the icon still cannot be registered, the log says so at `ERROR` after ten
+attempts rather than failing quietly.
 
 ### Files it creates
 
@@ -642,6 +665,23 @@ LightSwitchStandalone.exe --help        显示以上说明
    完整的手势对照表见英文部分的 *Trigger conditions*。
 6. 旧版本（1.2.0 及更早）的 `settings.json` 没有这个键；读不到就用默认值
    `false`，所以升级不会悄悄把单击切换重新打开。
+
+### 重启资源管理器后托盘图标还在吗
+
+在。以前**不在**——这是个 bug，1.3.1 修掉了。
+
+托盘区域（通知区）是 `explorer.exe` 的一部分。explorer 一重启，里面所有图标就都跟着
+消失了，而 Windows **不记得谁注册过什么，也不会主动通知谁来重新注册**。所以程序必须
+自己盯着 shell 广播的 `TaskbarCreated` 消息，收到就重新注册一次（连气泡提示一起）。
+
+三种情况都覆盖：托盘菜单里的「重启资源管理器」、设置对话框里同名的按钮、以及
+explorer 被外部杀掉或自己崩掉。
+
+程序**自己**重启 explorer 时还多一层保险：它先杀掉 explorer、等 800 ms、再起一个新的，
+这整段时间 UI 线程是停着的；而 Winlogon 的 `AutoRestartShell`（默认开启，位于
+`HKCU\Software\Microsoft\Windows NT\CurrentVersion\Winlogon`）很可能就在这段等待里
+把新 shell 拉起来了——那条广播于是发给一个没在取消息的线程，直接丢掉。所以除了广播，
+还有一个定时重试在兜。真注册不上的话，日志里会明确报 `ERROR`，不会悄悄失败。
 
 ### 文件放在哪
 

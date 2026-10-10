@@ -73,6 +73,9 @@ above (and therefore the output of `tools/fetch_upstream.ps1`) is unaffected.
 | `"language"` key in `settings.json` | `src/Config.{h,cpp}` | An additive extension. Upstream never reads it, and the app only drops *unknown* keys it does not model — `language` is modelled, so it survives a round trip. |
 | `"startOnLogin"` key in `settings.json` | `src/Config.{h,cpp}` | Same story; see the "Intentionally different" table in `README.md`. |
 | `"uiTheme"` key in `settings.json` | `src/Config.{h,cpp}` | Additive, same as the two above. Note the distinction from the scheduler: `uiTheme` only decides how *this application's* windows are drawn. Nothing in `src/vendor/` reads or writes it. |
+| `"trayClickTogglesTheme"` key in `settings.json` | `src/Config.{h,cpp}` | Additive, same as the three above. Gates the tray icon's single left click, which upstream PowerToys does not have at all — its icon opens the settings page on a left click. |
+| Tray icon re-registration across an Explorer restart | `src/TrayIcon.{h,cpp}`, `src/App.cpp` | No upstream counterpart: PowerToys' Runner owns the tray icon and registers it, so the module never saw this problem. Nothing in `src/vendor/` is involved — the shell restart does not touch the scheduler. |
+| Retry timer and `TaskbarCreated` handling | `src/App.{h,cpp}` | Same; `kTrayReAddTimer` is the only `SetTimer` in the program. |
 | `"trayClickTogglesTheme"` key in `settings.json` | `src/Config.{h,cpp}`, `src/App.cpp` | Additive. Gates one gesture (a single left click on the tray icon) and nothing else. Upstream has no tray icon of its own — the module is loaded by the PowerToys Runner, which owns the tray — so there is no upstream behaviour to stay compatible with here. See the "Trigger conditions" table in `README.md`. |
 
 If upstream ever grows a localisation mechanism of its own, translate the

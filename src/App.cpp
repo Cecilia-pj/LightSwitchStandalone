@@ -132,6 +132,16 @@ bool App::Init(HINSTANCE instance)
     m_instance = instance;
     g_app = this;
 
+    // Registered before the window exists so no broadcast can be missed. The
+    // shell sends this after it has rebuilt the notification area, which is the
+    // only signal that an icon registered with a previous shell has been lost.
+    m_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
+    if (m_taskbarCreatedMessage == 0)
+    {
+        LOG_WARN(L"[App] RegisterWindowMessage(\"TaskbarCreated\") failed (error "
+                 << GetLastError() << L"); the tray icon will not survive a shell restart.");
+    }
+
     if (!CreateMessageWindow(instance))
         return false;
 
@@ -300,6 +310,16 @@ LRESULT CALLBACK App::WndProc(HWND window, UINT message, WPARAM wParam, LPARAM l
 
 LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
 {
+    // A registered message, so it is compared rather than used as a case label:
+    // the system hands out its value at runtime and it must not be assumed to
+    // sit outside the WM_ range. The zero check covers a failed registration
+    // (that would compare equal to WM_NULL).
+    if (m_taskbarCreatedMessage != 0 && message == m_taskbarCreatedMessage)
+    {
+        OnTaskbarCreated();
+        return 0;
+    }
+
     switch (message)
     {
     case TrayIcon::kCallbackMessage:
@@ -354,6 +374,16 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
         DarkApp::ApplyIfNeeded(m_window);
         return 0;
 
+    case WM_TIMER:
+        if (wParam == kTrayReAddTimer)
+        {
+            // One-shot: TryReAddTrayIcon re-arms it only if it wants another go.
+            KillTimer(m_window, kTrayReAddTimer);
+            TryReAddTrayIcon();
+            return 0;
+        }
+        break;
+
     case WM_QUERYENDSESSION:
         return TRUE;
 
@@ -379,6 +409,57 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     return DefWindowProcW(m_window, message, wParam, lParam);
+}
+
+void App::OnTaskbarCreated()
+{
+    // explorer.exe was restarted - by this program's own "Restart Explorer"
+    // command, by the user through Task Manager, or by Windows after a crash.
+    // The notification area is explorer's, so the icon died with the old shell:
+    // the new one starts with an empty tray and never asks anyone to come back.
+    // Registering again is the only way in, and this broadcast is the cue.
+    LOG_INFO(L"[App] The shell restarted; registering the tray icon again.");
+    m_trayReAddAttempts = 0;
+    TryReAddTrayIcon();
+}
+
+void App::TryReAddTrayIcon()
+{
+    if (m_tray.ReAdd())
+    {
+        // Whichever path got here first wins; drop any retry the other one left
+        // armed so the icon is not registered twice for one shell restart.
+        KillTimer(m_window, kTrayReAddTimer);
+
+        // The shell keeps its own copy of the tooltip and that copy died with
+        // the old shell, so put the current one back. Add() already restored the
+        // product name; this replaces it with the live schedule summary.
+        UpdateTooltip();
+        m_trayReAddAttempts = 0;
+        LOG_INFO(L"[App] Tray icon restored.");
+        return;
+    }
+
+    ++m_trayReAddAttempts;
+    if (m_trayReAddAttempts >= kTrayReAddMaxAttempts)
+    {
+        LOG_ERROR(L"[App] The tray icon could not be registered again after "
+                  << kTrayReAddMaxAttempts << L" attempts; restart the program to get it back.");
+        m_trayReAddAttempts = 0;
+        return;
+    }
+
+    // Shell_NotifyIcon refuses NIM_ADD while the new notification area is still
+    // being built, which is normal for a moment after the broadcast. Retry a
+    // bounded number of times instead of writing the icon off for the session.
+    //
+    // INFO, not WARN: after this program restarts explorer itself, several
+    // refusals in a row are simply how long the new shell takes, and warning on
+    // every one of them would teach the reader to ignore warnings. Giving up for
+    // good is the ERROR below.
+    LOG_INFO(L"[App] Registering the tray icon failed; retrying ("
+             << m_trayReAddAttempts << L"/" << kTrayReAddMaxAttempts << L").");
+    SetTimer(m_window, kTrayReAddTimer, kTrayReAddIntervalMs, nullptr);
 }
 
 void App::HandleTrayCallback(LPARAM lParam)
@@ -507,7 +588,22 @@ void App::OnRestartExplorer()
         return;
 
     if (!RestartExplorer())
+    {
         MessageBoxW(m_window, L10n::T(Str::MsgRestartExplorerFailed), L10n::T(Str::ProductName), MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    // The icon did not survive that: we terminated the process that owned the
+    // notification area. The new shell's "TaskbarCreated" would normally be
+    // enough, but this thread was parked inside RestartExplorer() - sleeping,
+    // then starting explorer.exe - and Winlogon's AutoRestartShell (on by
+    // default) can bring the shell back during that window, in which case the
+    // broadcast is sent while this thread is not pumping and is dropped. So do
+    // not depend on catching it: ask for the icon back on a timer as well.
+    // Registering twice is harmless - same (hWnd, uID) just updates the entry.
+    LOG_INFO(L"[App] Explorer restarted; scheduling a tray icon check.");
+    m_trayReAddAttempts = 0;
+    SetTimer(m_window, kTrayReAddTimer, kTrayReAddIntervalMs, nullptr);
 }
 
 void App::OnSettingsSaved()
