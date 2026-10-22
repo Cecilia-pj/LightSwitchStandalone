@@ -14,10 +14,38 @@
 namespace ls
 {
 
+namespace
+{
+
+// A failed apply is retried half an hour later, not every minute: the usual
+// causes (theme file moved, theme service disabled) do not fix themselves
+// within a tick, and each retry costs a wallpaper swap attempt.
+constexpr int kApplyRetryMinutes = 30;
+
+} // namespace
+
 LightSwitchState StateManager::GetState() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_state;
+}
+
+void StateManager::AdoptCurrentIdentity(const theme::ThemeIdentity& identity)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_state.currentTheme = identity;
+}
+
+void StateManager::MarkApplyFailedLocked(int retryAfterMinutes)
+{
+    m_state.lastApplyFailed = true;
+    m_state.nextRetryTick = GetTickCount64() + static_cast<ULONGLONG>(retryAfterMinutes) * 60ULL * 1000ULL;
+}
+
+void StateManager::MarkApplyFailed(int retryAfterMinutes)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    MarkApplyFailedLocked(retryAfterMinutes);
 }
 
 bool StateManager::CoordinatesAreValid(const std::wstring& latitude, const std::wstring& longitude)
@@ -74,13 +102,14 @@ void StateManager::SyncInitialThemeState()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
-    m_state.isSystemLightActive = GetCurrentSystemTheme();
-    m_state.isAppsLightActive = GetCurrentAppsTheme();
+    m_state.currentTheme = theme::ReadCurrentIdentity();
+    m_state.lastAppliedTheme = theme::ThemeIdentity{};
+    m_state.lastApplyTick = 0;
     m_state.isNightLightActive = IsNightLightEnabled();
 
-    LOG_INFO(L"[StateManager] Initial state: system=" << (m_state.isSystemLightActive ? L"light" : L"dark")
-                                                      << L", apps=" << (m_state.isAppsLightActive ? L"light" : L"dark")
-                                                      << L", nightLight=" << (m_state.isNightLightActive ? L"on" : L"off"));
+    LOG_INFO(L"[StateManager] Initial theme: \"" << m_state.currentTheme.path << L"\" (id "
+                                                 << (m_state.currentTheme.themeId.empty() ? L"none" : m_state.currentTheme.themeId)
+                                                 << L"), nightLight=" << (m_state.isNightLightActive ? L"on" : L"off") << L".");
 
     EvaluateAndApplyIfNeeded();
 }
@@ -95,6 +124,11 @@ void StateManager::OnSettingsChanged()
         LOG_INFO(L"[StateManager] Settings changed; clearing manual override.");
         m_state.isManualOverride = false;
     }
+
+    // The user may have pointed a side at a different theme, so "we already
+    // applied that one" no longer means anything.
+    m_state.lastAppliedTheme = theme::ThemeIdentity{};
+    m_state.nextRetryTick = 0;
 
     EvaluateAndApplyIfNeeded();
 }
@@ -119,8 +153,13 @@ void StateManager::OnManualOverride()
     // direction isManualOverride just toggled. Sync the cached state so the
     // scheduler compares against the actual current theme on the next
     // evaluation.
-    m_state.isSystemLightActive = GetCurrentSystemTheme();
-    m_state.isAppsLightActive = GetCurrentAppsTheme();
+    m_state.currentTheme = theme::ReadCurrentIdentity();
+
+    // Whatever we applied last is no longer what is on screen, so the
+    // "already tried this one" shortcut must not swallow the next apply after
+    // the override is released at the following boundary.
+    m_state.lastAppliedTheme = theme::ThemeIdentity{};
+    m_state.nextRetryTick = 0;
 
     EvaluateAndApplyIfNeeded();
 }
@@ -226,27 +265,62 @@ void StateManager::EvaluateAndApplyIfNeeded()
 
     m_state.lastAppliedMode = config.scheduleMode;
 
-    bool shouldBeLight = false;
-    if (config.scheduleMode == ScheduleMode::FollowNightLight)
+    const bool shouldBeLight = (config.scheduleMode == ScheduleMode::FollowNightLight)
+                                   ? !m_state.isNightLightActive
+                                   : ShouldBeLight(now, m_state.effectiveLightMinutes, m_state.effectiveDarkMinutes);
+
+    const std::wstring& targetPath = shouldBeLight ? config.themeA : config.themeB;
+    if (targetPath.empty())
     {
-        shouldBeLight = !m_state.isNightLightActive;
+        if (!m_state.warnedMissingTheme)
+        {
+            m_state.warnedMissingTheme = true;
+            LOG_WARN(L"[StateManager] Theme " << (shouldBeLight ? L"A (light side)" : L"B (dark side)")
+                                              << L" is not configured; automatic switching stays idle.");
+        }
+        m_state.lastTickMinutes = now;
+        return;
+    }
+    m_state.warnedMissingTheme = false;
+
+    const ThemeTarget target = MakeTarget(targetPath);
+
+    // Three reasons to leave the desktop alone. "Matches current" is the normal
+    // case; "already tried" covers the degraded path where the pack could not
+    // be applied and only the registry mode changed, so the identity will never
+    // match; the retry deadline covers a target that failed outright.
+    const bool matchesCurrent = theme::SameIdentity(m_state.currentTheme, target.identity);
+    const bool alreadyTried = theme::SameIdentity(m_state.lastAppliedTheme, target.identity);
+    if (matchesCurrent || alreadyTried)
+    {
+        m_state.lastTickMinutes = now;
+        return;
+    }
+
+    if (GetTickCount64() < m_state.nextRetryTick)
+    {
+        m_state.lastTickMinutes = now;
+        return;
+    }
+
+    LOG_INFO(L"[StateManager] Applying theme " << (shouldBeLight ? L"A" : L"B") << L": \"" << target.path << L"\".");
+    const ApplyReport report = ApplyThemeTarget(target);
+
+    if (IsSuccess(report))
+    {
+        m_state.currentTheme = (report.status == ApplyStatus::Ok) ? report.observed : target.identity;
+        m_state.lastAppliedTheme = target.identity;
+        m_state.lastApplyTick = GetTickCount64();
+        m_state.nextRetryTick = 0;
+        m_state.lastApplyFailed = false;
+        LOG_INFO(L"[StateManager] " << ApplyStatusName(report.status) << L": " << report.detail << L".");
     }
     else
     {
-        shouldBeLight = ShouldBeLight(now, m_state.effectiveLightMinutes, m_state.effectiveDarkMinutes);
-    }
-
-    const bool appsNeedsToChange = config.changeApps && (m_state.isAppsLightActive != shouldBeLight);
-    const bool systemNeedsToChange = config.changeSystem && (m_state.isSystemLightActive != shouldBeLight);
-
-    // Only apply the theme if there is a change and no override is active.
-    if (!m_state.isManualOverride && (appsNeedsToChange || systemNeedsToChange))
-    {
-        LOG_INFO(L"[StateManager] Applying " << (shouldBeLight ? L"light" : L"dark") << L" theme.");
-        ApplyTheme(config, shouldBeLight);
-
-        m_state.isSystemLightActive = GetCurrentSystemTheme();
-        m_state.isAppsLightActive = GetCurrentAppsTheme();
+        MarkApplyFailedLocked(kApplyRetryMinutes);
+        LOG_WARN(L"[StateManager] Could not apply \"" << target.path << L"\" (" << ApplyStatusName(report.status)
+                                                      << L": " << report.detail << L"); retrying in "
+                                                      << kApplyRetryMinutes << L" minutes.");
     }
 
     m_state.lastTickMinutes = now;

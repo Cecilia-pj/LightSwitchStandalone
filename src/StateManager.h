@@ -18,6 +18,7 @@
 #pragma once
 
 #include "Config.h"
+#include "ThemeCatalog.h"
 
 #include <mutex>
 
@@ -29,9 +30,31 @@ struct LightSwitchState
 {
     ScheduleMode lastAppliedMode = ScheduleMode::Off;
     bool isManualOverride = false;
-    bool isSystemLightActive = false;
-    bool isAppsLightActive = false;
     bool isNightLightActive = false;
+
+    // The theme Windows reports, and the theme this program last put there.
+    // Both are identities (ThemeId, or the path when the file has no id), not
+    // booleans: a schedule can alternate between any two packs, and Windows
+    // rewrites CurrentTheme to Custom.theme whenever the user tweaks a colour.
+    theme::ThemeIdentity currentTheme;
+    theme::ThemeIdentity lastAppliedTheme;
+
+    // GetTickCount64() of the last successful apply. Everything observed inside
+    // the grace window afterwards is attributed to that apply.
+    ULONGLONG lastApplyTick = 0;
+
+    // Back-off after a failed apply (missing file, unusable COM), as a
+    // GetTickCount64() deadline. A tick counter rather than "minutes since
+    // midnight" so it cannot wrap at midnight.
+    ULONGLONG nextRetryTick = 0;
+
+    // True while the last apply attempt failed; also used to log a broken
+    // configuration once instead of once per tick.
+    bool lastApplyFailed = false;
+
+    // Guards against a warning every single minute when a side is unconfigured.
+    bool warnedMissingTheme = false;
+
     int lastEvaluatedDay = -1;
     int lastTickMinutes = -1;
 
@@ -64,6 +87,13 @@ public:
     // Called when the night-light registry value changed.
     void OnNightLightChange();
 
+    // Refresh the cached identity from Windows without applying anything or
+    // touching the manual-override flag.
+    void AdoptCurrentIdentity(const theme::ThemeIdentity& identity);
+
+    // Stop retrying a target that cannot be applied for the next while.
+    void MarkApplyFailed(int retryAfterMinutes);
+
     // Copy of the current state (thread-safe).
     LightSwitchState GetState() const;
 
@@ -73,6 +103,7 @@ private:
 
     // Caller must hold m_mutex.
     bool UpdateSunTimesIfNeeded(const Config& config, LightSwitchState& state);
+    void MarkApplyFailedLocked(int retryAfterMinutes);
 
     mutable std::mutex m_mutex;
     LightSwitchState m_state;

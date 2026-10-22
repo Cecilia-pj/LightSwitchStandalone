@@ -4,9 +4,10 @@
 //   (no arguments)      run resident: tray icon + scheduler + global hotkey
 //   --settings          run resident and open the settings dialog immediately
 //   --startup           same as no arguments; written into the Run key
-//   --toggle            flip the theme per the current settings and exit
-//   --light             force the light theme and exit
-//   --dark              force the dark theme and exit
+//   --toggle            apply the other of the two themes once and exit
+//   --light / --theme-a apply theme A once and exit
+//   --dark  / --theme-b apply theme B once and exit
+//   --theme FILE        apply an arbitrary .theme file once and exit
 //   --lang CODE         override the interface language for this run only
 //   --dump-strings FILE write every interface string to FILE and exit
 //   --dump-themes FILE  write every .theme found to FILE as TSV and exit
@@ -63,9 +64,60 @@ enum class OneShot
 {
     None,
     Toggle,
-    ForceLight,
-    ForceDark
+    ApplyLight,
+    ApplyDark
 };
+
+// Exit codes, stable so a script can branch on them:
+//   0 applied (or already active)   2 nothing configured
+//   3 theme file missing            4 the theme could not be applied
+int ApplyOneShot(OneShot mode, const std::wstring& explicitPath)
+{
+    const ls::Config config = ls::SettingsStore::Instance().Get();
+
+    ls::ThemeTarget target;
+    if (!explicitPath.empty())
+    {
+        target = ls::MakeTarget(explicitPath);
+    }
+    else if (mode == OneShot::ApplyLight)
+    {
+        target = ls::MakeTarget(config.themeA);
+    }
+    else if (mode == OneShot::ApplyDark)
+    {
+        target = ls::MakeTarget(config.themeB);
+    }
+    else
+    {
+        if (config.themeA.empty() || config.themeB.empty())
+        {
+            LOG_WARN(L"[main] Toggle requested, but both themes must be chosen first (themeA="
+                     << (config.themeA.empty() ? L"unset" : L"set") << L", themeB="
+                     << (config.themeB.empty() ? L"unset" : L"set") << L").");
+            return 2;
+        }
+
+        const bool currentlyDark = ls::theme::SameIdentity(
+            ls::theme::ReadCurrentIdentity(), ls::MakeTarget(config.themeB).identity);
+        target = ls::MakeTarget(currentlyDark ? config.themeA : config.themeB);
+    }
+
+    if (target.Empty())
+    {
+        LOG_WARN(L"[main] No theme to apply; set themeA and themeB in settings first.");
+        return 2;
+    }
+
+    LOG_INFO(L"[main] Applying \"" << target.path << L"\".");
+    const ls::ApplyReport report = ls::ApplyThemeTarget(target);
+    LOG_INFO(L"[main] " << ls::ApplyStatusName(report.status) << L": " << report.detail << L".");
+    ls::ShutdownStaWorker();
+
+    if (ls::IsSuccess(report))
+        return 0;
+    return report.status == ls::ApplyStatus::FileMissing ? 3 : 4;
+}
 
 // One row per theme: name, the two mode hints, the identity and the path.
 // Written as a file rather than to stdout because this is a windowed
@@ -130,37 +182,6 @@ std::wstring BuildThemeCheckReport()
     return text;
 }
 
-bool ApplyOneShot(OneShot mode)
-{
-    const ls::Config config = ls::SettingsStore::Instance().Get();
-
-    if (!config.changeSystem && !config.changeApps)
-    {
-        LOG_WARN(L"[main] Neither the system nor the apps theme is enabled in settings; nothing to do.");
-        return false;
-    }
-
-    bool target = false;
-    switch (mode)
-    {
-    case OneShot::ForceLight:
-        target = true;
-        break;
-    case OneShot::ForceDark:
-        target = false;
-        break;
-    default:
-    {
-        const bool currentlyLight = config.changeSystem ? GetCurrentSystemTheme() : GetCurrentAppsTheme();
-        target = !currentlyLight;
-        break;
-    }
-    }
-
-    ls::ApplyTheme(config, target);
-    return true;
-}
-
 } // namespace
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
@@ -183,6 +204,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
     std::wstring dumpPath;
     std::wstring themeDumpPath;
     std::wstring themeCheckPath;
+    std::wstring explicitTheme;
 
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -193,10 +215,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
             const std::wstring argument = argv[i];
             if (_wcsicmp(argument.c_str(), L"--toggle") == 0)
                 oneShot = OneShot::Toggle;
-            else if (_wcsicmp(argument.c_str(), L"--light") == 0)
-                oneShot = OneShot::ForceLight;
-            else if (_wcsicmp(argument.c_str(), L"--dark") == 0)
-                oneShot = OneShot::ForceDark;
+            else if (_wcsicmp(argument.c_str(), L"--light") == 0 || _wcsicmp(argument.c_str(), L"--theme-a") == 0)
+                oneShot = OneShot::ApplyLight;
+            else if (_wcsicmp(argument.c_str(), L"--dark") == 0 || _wcsicmp(argument.c_str(), L"--theme-b") == 0)
+                oneShot = OneShot::ApplyDark;
             else if (_wcsicmp(argument.c_str(), L"--settings") == 0)
                 openSettings = true;
             else if (_wcsicmp(argument.c_str(), L"--startup") == 0)
@@ -218,6 +240,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
             else if (_wcsicmp(argument.c_str(), L"--theme-check") == 0 && i + 1 < argc)
             {
                 themeCheckPath = argv[++i];
+            }
+            else if (_wcsicmp(argument.c_str(), L"--theme") == 0 && i + 1 < argc)
+            {
+                // An arbitrary .theme file, applied once. Handy for testing a
+                // pack before choosing it, and for scripts.
+                explicitTheme = argv[++i];
             }
             else if (_wcsicmp(argument.c_str(), L"--help") == 0 || _wcsicmp(argument.c_str(), L"/?") == 0)
             {
@@ -288,8 +316,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
         return 0;
     }
 
-    if (oneShot != OneShot::None)
-        return ApplyOneShot(oneShot) ? 0 : 2;
+    if (oneShot != OneShot::None || !explicitTheme.empty())
+        return ApplyOneShot(oneShot, explicitTheme);
 
     // ---- Single instance -------------------------------------------------
     HANDLE instanceMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutex);

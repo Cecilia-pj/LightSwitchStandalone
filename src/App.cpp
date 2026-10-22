@@ -6,6 +6,7 @@
 #include "L10n.h"
 #include "Logging.h"
 #include "StateManager.h"
+#include "WindowsTheme.h"
 #include "dark/DarkApp.h"
 #include "vendor/ThemeHelper.h"
 
@@ -232,6 +233,11 @@ void App::Shutdown()
     m_scheduler.Stop();
     m_hotkey.Unregister();
     m_tray.Remove();
+
+    // The scheduler is stopped, so nothing can be inside a theme apply any
+    // more; releasing the STA worker here is safe and lets themeui.dll unload
+    // instead of being torn down mid-call by process exit.
+    ShutdownStaWorker();
 
     // Join the settings-file watcher thread so nothing keeps running after the
     // message loop ends.

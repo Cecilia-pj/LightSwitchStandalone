@@ -15,18 +15,26 @@ namespace ls
 namespace
 {
 
-// Mirrors upstream DetectAndHandleExternalThemeChange():
-// if the user changed the theme from Windows Settings and it no longer matches
-// the schedule, treat it as a manual override so we stop fighting the user
-// until the next schedule boundary.
-void DetectAndHandleExternalThemeChange(StateManager& stateManager)
+// Anything observed this soon after our own successful apply is attributed to
+// that apply, not to the user. Windows rewrites CurrentTheme to Custom.theme
+// whenever a colour, wallpaper mode or accent is touched, and the rewrite has a
+// different ThemeId and a different path - so no amount of identity comparison
+// survives it. Without this window the program would detect its own work as a
+// manual override and then sit out the rest of the day.
+constexpr ULONGLONG kPostApplyGraceMs = 30000;
+
+constexpr int kRetryMinutes = 30;
+
+// Which side of the pair the schedule currently wants. Mirrors the arithmetic
+// in StateManager::EvaluateAndApplyIfNeeded - kept separate because the
+// detection path must not touch the state it is about to correct.
+bool ScheduleWantsDark(StateManager& stateManager)
 {
     const Config config = SettingsStore::Instance().Get();
-    if (config.scheduleMode == ScheduleMode::Off)
-        return;
+    if (config.scheduleMode == ScheduleMode::FollowNightLight)
+        return IsNightLightEnabled();
 
     const int nowMinutes = GetNowMinutes();
-
     int effectiveLight = config.lightTime;
     int effectiveDark = config.darkTime;
 
@@ -40,44 +48,125 @@ void DetectAndHandleExternalThemeChange(StateManager& stateManager)
         }
     }
 
-    bool shouldBeLight = false;
-    if (config.scheduleMode == ScheduleMode::FollowNightLight)
-    {
-        shouldBeLight = !IsNightLightEnabled();
-    }
-    else
-    {
-        shouldBeLight = ShouldBeLight(nowMinutes, effectiveLight, effectiveDark);
-    }
-
-    const bool currentSystemLight = GetCurrentSystemTheme();
-    const bool currentAppsLight = GetCurrentAppsTheme();
-
-    const bool systemMismatch = config.changeSystem && (currentSystemLight != shouldBeLight);
-    const bool appsMismatch = config.changeApps && (currentAppsLight != shouldBeLight);
-
-    if ((systemMismatch || appsMismatch) && !stateManager.GetState().isManualOverride)
-    {
-        LOG_INFO(L"[Scheduler] External theme change detected; entering manual override mode.");
-        stateManager.OnManualOverride();
-    }
+    return !ShouldBeLight(nowMinutes, effectiveLight, effectiveDark);
 }
 
-// Flips the theme by hand, exactly the way the PowerToys module interface did
-// from its hotkey handler. Deliberately runs on the worker thread.
-bool FlipThemeByHand()
+// Mirrors upstream DetectAndHandleExternalThemeChange():
+// if the user changed the theme from Windows Settings and it no longer matches
+// the schedule, treat it as a manual override so we stop fighting the user
+// until the next schedule boundary.
+//
+// Since 1.4.0 the comparison is an identity comparison against the configured
+// pack, with three escape hatches in front of it - see the comments inline.
+void DetectAndHandleExternalThemeChange(StateManager& stateManager)
+{
+    const Config config = SettingsStore::Instance().Get();
+    if (config.scheduleMode == ScheduleMode::Off)
+        return;
+
+    const std::wstring targetPath = ScheduleWantsDark(stateManager) ? config.themeB : config.themeA;
+    if (targetPath.empty())
+        return;
+
+    const theme::ThemeIdentity current = theme::ReadCurrentIdentity();
+    const LightSwitchState state = stateManager.GetState();
+
+    // Already standing down: just keep the cache fresh.
+    if (state.isManualOverride)
+    {
+        stateManager.AdoptCurrentIdentity(current);
+        return;
+    }
+
+    const ThemeTarget target = MakeTarget(targetPath);
+
+    // On schedule. The common case, and the one that must stay silent.
+    if (theme::SameIdentity(current, target.identity))
+    {
+        stateManager.AdoptCurrentIdentity(current);
+        return;
+    }
+
+    // Our own apply, possibly rewritten by Windows on the way out.
+    if (state.lastApplyTick != 0 && GetTickCount64() - state.lastApplyTick < kPostApplyGraceMs)
+    {
+        LOG_INFO(L"[Scheduler] Theme identity differs inside the post-apply grace window; "
+                 L"treating it as our own result (current=\"" << current.path << L"\").");
+        stateManager.AdoptCurrentIdentity(current);
+        return;
+    }
+
+    // Still the theme we last wrote: Windows merely re-spelled the path or the
+    // user re-saved the same pack. Not an external change.
+    if (theme::SameIdentity(current, state.lastAppliedTheme))
+    {
+        stateManager.AdoptCurrentIdentity(current);
+        return;
+    }
+
+    // The target itself is broken. That is a configuration error, not the user
+    // taking over, so back off instead of entering override.
+    if (theme::DescribePath(targetPath).fileMissing)
+    {
+        if (!state.lastApplyFailed)
+        {
+            LOG_WARN(L"[Scheduler] Scheduled theme file is missing: \"" << targetPath
+                                                                       << L"\". Backing off, not overriding.");
+            stateManager.MarkApplyFailed(kRetryMinutes);
+        }
+        return;
+    }
+
+    LOG_INFO(L"[Scheduler] External theme change detected: current=\"" << current.path
+                                                                      << L"\" (" << (current.themeId.empty() ? L"no id" : current.themeId)
+                                                                      << L"), schedule wants \"" << targetPath
+                                                                      << L"\". Entering manual override.");
+    stateManager.OnManualOverride();
+}
+
+// Applies one named side. Deliberately runs on the worker thread.
+ApplyReport ApplySide(bool darkSide)
+{
+    const Config config = SettingsStore::Instance().Get();
+    const std::wstring path = darkSide ? config.themeB : config.themeA;
+
+    ApplyReport report;
+    report.requestedPath = path;
+
+    if (path.empty())
+    {
+        LOG_WARN(L"[Scheduler] Asked for the " << (darkSide ? L"dark" : L"light")
+                                              << L" theme, but that side is not configured.");
+        report.status = ApplyStatus::FileMissing;
+        report.detail = L"that side has no theme configured";
+        return report;
+    }
+
+    LOG_INFO(L"[Scheduler] Applying the " << (darkSide ? L"dark" : L"light") << L" theme: \"" << path << L"\".");
+    return ApplyThemeTarget(MakeTarget(path));
+}
+
+// Flips to the other side of the pair, exactly the way the PowerToys module
+// interface did from its hotkey handler.
+ApplyReport FlipThemeByHand()
 {
     const Config config = SettingsStore::Instance().Get();
 
-    if (!config.changeSystem && !config.changeApps)
+    if (config.themeA.empty() || config.themeB.empty())
     {
-        LOG_WARN(L"[Scheduler] Toggle requested, but neither \"Windows system\" nor \"Applications\" is enabled in settings.");
-        return false;
+        LOG_WARN(L"[Scheduler] Toggle requested, but both themes must be chosen first "
+                 L"(themeA=" << (config.themeA.empty() ? L"unset" : L"set")
+                 << L", themeB=" << (config.themeB.empty() ? L"unset" : L"set") << L").");
+        ApplyReport report;
+        report.status = ApplyStatus::FileMissing;
+        report.detail = L"one of the two themes is not configured";
+        return report;
     }
 
-    const bool currentlyLight = config.changeSystem ? GetCurrentSystemTheme() : GetCurrentAppsTheme();
-    ApplyTheme(config, !currentlyLight);
-    return true;
+    const theme::ThemeIdentity current = theme::ReadCurrentIdentity();
+    const bool currentlyDark = theme::SameIdentity(current, MakeTarget(config.themeB).identity);
+
+    return ApplySide(!currentlyDark);
 }
 
 } // namespace
@@ -89,6 +178,7 @@ Scheduler::Scheduler()
     m_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     m_tickEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     m_manualEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    m_sideEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     m_nightLightEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 }
 
@@ -98,7 +188,7 @@ Scheduler::~Scheduler()
 
     EnsureNightLightWatcher(false);
 
-    for (HANDLE* handle : { &m_stopEvent, &m_tickEvent, &m_manualEvent, &m_nightLightEvent })
+    for (HANDLE* handle : { &m_stopEvent, &m_tickEvent, &m_manualEvent, &m_sideEvent, &m_nightLightEvent })
     {
         if (*handle)
         {
@@ -164,6 +254,13 @@ void Scheduler::RequestToggle()
         SetEvent(m_manualEvent);
 }
 
+void Scheduler::RequestApplySide(bool darkSide)
+{
+    m_pendingSide = darkSide ? 1 : 0;
+    if (m_sideEvent)
+        SetEvent(m_sideEvent);
+}
+
 void Scheduler::EnsureNightLightWatcher(bool needed)
 {
     if (needed && !m_nightLightWatcher)
@@ -209,11 +306,12 @@ void Scheduler::Run()
 
     while (m_running)
     {
-        HANDLE waits[5];
+        HANDLE waits[6];
         DWORD count = 0;
         waits[count++] = m_stopEvent;
         waits[count++] = m_tickEvent;
         waits[count++] = m_manualEvent;
+        waits[count++] = m_sideEvent;
         waits[count++] = m_nightLightEvent;
         waits[count++] = settingsChanged;
 
@@ -251,18 +349,34 @@ void Scheduler::Run()
         if (wait == WAIT_OBJECT_0 + 2)
         {
             LOG_INFO(L"[Scheduler] Manual toggle requested.");
-            if (FlipThemeByHand())
+            const ApplyReport report = FlipThemeByHand();
+            if (IsSuccess(report))
                 m_state->OnManualOverride();
+            else
+                LOG_WARN(L"[Scheduler] Manual toggle did nothing (" << ApplyStatusName(report.status)
+                                                                   << L": " << report.detail << L").");
             continue;
         }
 
         if (wait == WAIT_OBJECT_0 + 3)
         {
-            m_state->OnNightLightChange();
+            const bool darkSide = m_pendingSide.load() != 0;
+            const ApplyReport report = ApplySide(darkSide);
+            if (IsSuccess(report))
+                m_state->OnManualOverride();
+            else
+                LOG_WARN(L"[Scheduler] Applying the " << (darkSide ? L"dark" : L"light") << L" theme failed ("
+                                                      << ApplyStatusName(report.status) << L": " << report.detail << L").");
             continue;
         }
 
         if (wait == WAIT_OBJECT_0 + 4)
+        {
+            m_state->OnNightLightChange();
+            continue;
+        }
+
+        if (wait == WAIT_OBJECT_0 + 5)
         {
             ResetEvent(settingsChanged);
             LOG_INFO(L"[Scheduler] Settings changed; re-evaluating.");
