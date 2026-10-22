@@ -77,6 +77,9 @@ above (and therefore the output of `tools/fetch_upstream.ps1`) is unaffected.
 | Tray icon re-registration across an Explorer restart | `src/TrayIcon.{h,cpp}`, `src/App.cpp` | No upstream counterpart: PowerToys' Runner owns the tray icon and registers it, so the module never saw this problem. Nothing in `src/vendor/` is involved — the shell restart does not touch the scheduler. |
 | Retry timer and `TaskbarCreated` handling | `src/App.{h,cpp}` | Same; `kTrayReAddTimer` is the only `SetTimer` in the program. |
 | `"trayClickTogglesTheme"` key in `settings.json` | `src/Config.{h,cpp}`, `src/App.cpp` | Additive. Gates one gesture (a single left click on the tray icon) and nothing else. Upstream has no tray icon of its own — the module is loaded by the PowerToys Runner, which owns the tray — so there is no upstream behaviour to stay compatible with here. See the "Trigger conditions" table in `README.md`. |
+| **Windows theme packs (`.theme`) instead of the light/dark pair** | `src/ThemeCatalog.{h,cpp}`, `src/WindowsTheme.{h,cpp}`, `src/ThemeEngine.{h,cpp}`, `src/StateManager.{h,cpp}`, `src/Scheduler.{h,cpp}` | Upstream only ever wrote `SystemUsesLightTheme` / `AppsUseLightTheme`; there is no `.theme` code in PowerToys Light Switch at all. Everything here is new, and **no file under `src/vendor/` was edited to make it work**: `SetSystemTheme` / `SetAppsTheme` are simply no longer the primary path — they are reached only as the fallback when `IThemeManager2` cannot be used. |
+| `"themeA"` / `"themeB"` keys in `settings.json` | `src/Config.{h,cpp}` | Additive, like the three above. `changeSystem` / `changeApps` are still modelled — read, written back, never acted on — so a downgrade to 1.3.x keeps behaving the way the file says. |
+| `--dump-themes FILE`, `--theme-check FILE`, `--theme FILE` | `src/main.cpp` | Diagnostics for the pack path: what the catalogue can see, whether the COM class activates, and a one-shot apply. The Runner loads the module upstream, so upstream has no command line of its own. |
 
 If upstream ever grows a localisation mechanism of its own, translate the
 concept rather than the identifier names: the on-disk contract (`settings.json`
@@ -131,7 +134,10 @@ Recommended cadence and rules:
 * **Follow closely** (low churn, high behavioural value):
   * `ThemeHelper.cpp` — the registry + broadcast sequence is the heart of the
     component. If Microsoft changes `ColorPrevalence` handling or the message
-    list, this must be picked up.
+    list, this must be picked up. Since 1.4.0 these two functions are no longer
+    the primary path — a `.theme` pack sets the same two values from its own
+    `[VisualStyles]` section — but they are what runs when `IThemeManager2`
+    cannot be used, so the sequence still has to be right.
   * `ThemeScheduler.cpp` — sunrise/sunset maths. Edge cases (polar day/night,
     DST) are the ones users notice.
   * `LightSwitchUtils.h` — `ShouldBeLight` cross-midnight logic.

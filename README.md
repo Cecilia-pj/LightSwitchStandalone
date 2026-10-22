@@ -1,27 +1,35 @@
 # Light Switch Standalone
 
-A single-process Windows tray application that switches the Windows light/dark
-theme on a schedule or by sunrise/sunset, extracted from the PowerToys
-**Light Switch** module (`src/modules/LightSwitch/`) and rebuilt so that it does
-not need PowerToys, the PowerToys Runner, the PowerToys Settings UI, vcpkg,
-NuGet, or the Visual C++ redistributable.
+A single-process Windows tray application that switches between two **Windows
+themes** (`.theme` packs) on a schedule or by sunrise/sunset, extracted from the
+PowerToys **Light Switch** module (`src/modules/LightSwitch/`) and rebuilt so
+that it does not need PowerToys, the PowerToys Runner, the PowerToys Settings
+UI, vcpkg, NuGet, or the Visual C++ redistributable.
 
 Deliverable: one executable. Copy it anywhere, run it, and delete the folder to
 uninstall.
 
 ```
-bin/Release/LightSwitchStandalone.exe   ~520 KB, static CRT
+bin/Release/LightSwitchStandalone.exe   ~620 KB, static CRT
 ```
+
+Until 1.3.x this switched the light/dark **colour mode** (two registry DWORDs).
+Since 1.4.0 it switches whole theme packs, which is a superset: a pack carries
+wallpaper, colours, cursor, sounds and accent colour, and the light/dark mode
+travels inside it as `[VisualStyles] SystemMode` / `AppMode`. See *Themes*.
 
 ---
 
 ## What it does
 
-* Switches `HKCU\...\Themes\Personalize` values `SystemUsesLightTheme` and
-  `AppsUseLightTheme`, then broadcasts `WM_SETTINGCHANGE` with
-  `lParam = L"ImmersiveColorSet"` plus `WM_THEMECHANGED` so the shell picks the
-  change up. Switching to light also resets `ColorPrevalence` to 0 — same as
-  upstream.
+* Applies a `.theme` file through `IThemeManager2` (`themeui.dll`), which is what
+  Windows Settings itself uses. The whole pack changes: wallpaper, window
+  colours, mouse cursor, sound scheme, accent colour, and the light/dark mode
+  for both the shell and applications. A successful apply is confirmed by
+  re-reading `HKCU\...\CurrentVersion\Themes\CurrentTheme`, not by trusting the
+  call to have worked.
+* Two packs are configured — one for each side of the schedule — and you can
+  pick either of them by name from the tray menu at any time.
 * Four schedule modes:
   * **Off** — does nothing automatically.
   * **Fixed hours** — light between two wall-clock times.
@@ -29,7 +37,7 @@ bin/Release/LightSwitchStandalone.exe   ~520 KB, static CRT
     pair, with independent offsets in minutes.
   * **Follow Night Light** — mirrors the Windows Night Light toggle, detected by
     watching the CloudStore registry key.
-* Global toggle shortcut (default `Ctrl+Win+Shift+D`) that flips the theme by
+* Global toggle shortcut (default `Ctrl+Win+Shift+D`) that swaps the theme by
   hand and suspends automatic switching until the next schedule boundary.
 * Tray icon with a context menu; native Win32 settings dialog; optional
   "start when I sign in"; single-instance enforcement. A single left click on the
@@ -75,14 +83,14 @@ The project is a single `.vcxproj` with two configurations, both **x64 only**
 | `LanguageStandard` | `stdcpp20` | Structured bindings in `ThemeScheduler.cpp`, `contains()` elsewhere. |
 | `RuntimeLibrary` | `MultiThreaded` / `MultiThreadedDebug` | **Static CRT**, so no VC++ redistributable and a truly portable folder. |
 | `GenerateManifest` | `false` | The manifest is embedded by `src/LightSwitch.rc` as `RT_MANIFEST`; that avoids `mt.exe` having to merge two manifests that both declare an `assemblyIdentity`. |
-| Link libraries | `Advapi32 User32 Gdi32 Shell32 Shlwapi Ole32 Comctl32 Kernel32 Dwmapi Uxtheme` | Everything else is static CRT + STL. `Dwmapi` is for the immersive dark title bar, `Uxtheme` for the undocumented `SetPreferredAppMode` / `AllowDarkModeForWindow` ordinals — see *Dark mode*. |
+| Link libraries | `Advapi32 User32 Gdi32 Shell32 Shlwapi Ole32 Comctl32 Comdlg32 Kernel32 Dwmapi Uxtheme` | Everything else is static CRT + STL. `Dwmapi` is for the immersive dark title bar, `Uxtheme` for the undocumented `SetPreferredAppMode` / `AllowDarkModeForWindow` ordinals — see *Dark mode*. `Comdlg32` is for the *Browse…* file picker. `IThemeManager2` needs no import library: it is created with `CoCreateInstance` from `Ole32`. |
 | Warning level | `Level4` | `src/dark/darkmode.cpp` and `src/dark/darkui.cpp` are pinned to `Level3`; see *Dark mode > Provenance*. |
 
 Resulting import table, for reference:
 
 ```
-ADVAPI32.dll  USER32.dll  GDI32.dll  SHELL32.dll  ole32.dll  COMCTL32.dll  KERNEL32.dll
-dwmapi.dll  UxTheme.dll
+ADVAPI32.dll  USER32.dll  GDI32.dll  SHELL32.dll  ole32.dll  COMCTL32.dll  COMDLG32.dll
+KERNEL32.dll  dwmapi.dll  UxTheme.dll
 ```
 
 ### Building on a machine where MSBuild is blocked
@@ -99,8 +107,8 @@ cl /nologo /c /MP /EHsc /std:c++20 /utf-8 /W4 /permissive- /GS /O2 /MT /DNDEBUG 
 rc /nologo /I src /fo obj/LightSwitch.res src/LightSwitch.rc
 link /nologo /SUBSYSTEM:WINDOWS /MANIFEST:NO /OUT:bin/Release/LightSwitchStandalone.exe \
    obj/*.obj obj/LightSwitch.res \
-   Advapi32.lib User32.lib Gdi32.lib Shell32.lib Shlwapi.lib Ole32.lib Comctl32.lib Kernel32.lib \
-   Dwmapi.lib Uxtheme.lib
+   Advapi32.lib User32.lib Gdi32.lib Shell32.lib Shlwapi.lib Ole32.lib Comctl32.lib Comdlg32.lib \
+   Kernel32.lib Dwmapi.lib Uxtheme.lib
 ```
 
 ---
@@ -111,13 +119,20 @@ link /nologo /SUBSYSTEM:WINDOWS /MANIFEST:NO /OUT:bin/Release/LightSwitchStandal
 LightSwitchStandalone.exe              run in the notification area
 LightSwitchStandalone.exe --settings   run and open the settings dialog
 LightSwitchStandalone.exe --startup    same as no arguments (this is what the Run key uses)
-LightSwitchStandalone.exe --toggle     flip the theme once, then exit
-LightSwitchStandalone.exe --light      force the light theme once, then exit
-LightSwitchStandalone.exe --dark       force the dark theme once, then exit
+LightSwitchStandalone.exe --toggle     swap to the other pack once, then exit
+LightSwitchStandalone.exe --light      apply the light-side pack once, then exit
+                                       (--theme-a is a synonym)
+LightSwitchStandalone.exe --dark       apply the dark-side pack once, then exit
+                                       (--theme-b is a synonym)
+LightSwitchStandalone.exe --theme FILE apply one arbitrary .theme file once, then exit
 LightSwitchStandalone.exe --lang CODE  force the interface language for this run only
                                        (auto | en-US | zh-CN)
 LightSwitchStandalone.exe --dump-strings FILE
                                        write every interface string to FILE, then exit
+LightSwitchStandalone.exe --dump-themes FILE
+                                       write every theme the catalogue can see, then exit
+LightSwitchStandalone.exe --theme-check FILE
+                                       probe IThemeManager2 and write the verdict, then exit
 LightSwitchStandalone.exe --help       show the above
 ```
 
@@ -126,11 +141,20 @@ handy for taking screenshots in both languages, or for typing a translated
 dialog layout. `--dump-strings` writes UTF-8 with a BOM and exits before the
 single-instance check, so it works while the app is already running; it is meant
 for diffing a translation and for machine-checking that both languages carry the
-same ids in the same order (see *Localisation* below).
+same ids in the same order (see *Localisation* below). `--dump-themes` and
+`--theme-check` are the two diagnostics described under *Themes*.
 
-Tray menu: *Toggle theme now*, *Settings…*, *Reload settings from disk*, *Open
-settings folder*, *Restart Explorer (refresh shell)*, *View log*, *Exit*. The
-menu is rebuilt on every right-click, so it always shows the active language.
+The one-shot commands (`--toggle`, `--light`, `--dark`, `--theme`) exit 0 when
+the pack was applied **or was already the current one**, 2 when that side is not
+configured, 3 when the file is missing and 4 when it could not be applied — so a
+script can tell "nothing to do" from "this is broken".
+
+Tray menu: *Toggle theme now*, *Light theme: …*, *Dark theme: …*, *Settings…*,
+*Reload settings from disk*, *Open settings folder*, *Restart Explorer (refresh
+shell)*, *View log*, *Exit*. The two theme rows carry a bullet on whichever pack
+Windows is running and are greyed out when that side is not configured. The menu
+is rebuilt on every right-click, so it always shows the active language and the
+current pair.
 
 ### Trigger conditions
 
@@ -144,8 +168,9 @@ so a tap is a mouse click as far as the application is concerned.
 | Double click | `WM_LBUTTONDBLCLK` plus two `WM_LBUTTONUP` | Opens the settings dialog. The two `WM_LBUTTONUP` messages cancel each other out, so this never flips the theme | No |
 | Right click | `WM_RBUTTONUP` / `WM_CONTEXTMENU` | Opens the context menu, which has its own *Toggle theme now* entry | No |
 | **Press and hold on a touch screen** | `WM_CONTEXTMENU` | Opens the context menu. This is why a long press has never toggled the theme | No |
-| Global hotkey, `Ctrl+Win+Shift+D` by default | `WM_HOTKEY` | Toggles immediately | Yes |
-| *Toggle now* in the settings dialog | — | Toggles immediately | Yes |
+| Global hotkey, `Ctrl+Win+Shift+D` by default | `WM_HOTKEY` | Swaps the two packs | Yes |
+| *Toggle now* in the settings dialog | — | Swaps the two packs | Yes |
+| *Light theme: …* / *Dark theme: …* in the tray menu | — | Applies that pack specifically | Yes, to that side |
 
 So there is no press-duration logic anywhere in the program: a long press opens
 the menu, and the gesture that used to flip the theme by accident was a plain
@@ -203,6 +228,8 @@ can be copied over verbatim for comparison.
   "startOnLogin":     { "value": false },
   "language":         { "value": "auto" },
   "uiTheme":          { "value": "auto" },
+  "themeA":           { "value": "" },
+  "themeB":           { "value": "" },
   "trayClickTogglesTheme": { "value": false }
 }
 ```
@@ -210,8 +237,24 @@ can be copied over verbatim for comparison.
 `scheduleMode` accepts `"Off"`, `"FixedHours"`, `"SunsetToSunrise"`,
 `"FollowNightLight"`. `lightTime` / `darkTime` are minutes since midnight.
 `code` is a virtual-key code (`68` = `D`). `startOnLogin`, `language`,
-`uiTheme` and `trayClickTogglesTheme` are the only standalone-specific
-extensions.
+`uiTheme`, `themeA`, `themeB` and `trayClickTogglesTheme` are the only
+standalone-specific extensions.
+
+`themeA` / `themeB` are **absolute paths to `.theme` files** — A is applied
+during the light side of the schedule, B during the dark side. An empty string
+means "not chosen yet", and automatic switching then stays idle instead of
+applying something the user did not pick. Paths are stored rather than
+`ThemeId`s so the file stays legible and a theme can be moved and the entry
+corrected by hand; the id is re-read from the file every time it is needed (see
+*Themes*).
+
+`changeSystem` / `changeApps` are **inert since 1.4.0.** They are the historic
+PowerToys switches for "apply to the Windows chrome" and "apply to
+applications"; a `.theme` pack carries both modes in its own `[VisualStyles]`
+section, so there is nothing left for them to decide. They are still written
+back untouched, because that is what lets a downgrade to 1.3.x behave the way
+the file says, and the upgrade migration uses them to tell whether switching was
+ever enabled.
 
 `language` accepts `"auto"` (follow the Windows display language), `"en-US"` /
 `"en"`, or `"zh-CN"` / `"zh"` / `"zh-Hans"`, case-insensitively. The value is
@@ -249,6 +292,128 @@ by hand.
 
 ---
 
+## Themes
+
+A `.theme` file is an INI file describing a complete look: wallpaper, window
+colours, mouse cursors, sound scheme, desktop icons, screensaver, and the
+light/dark mode to use for the shell and for applications. On this machine they
+are plain single-byte CP936 — **not** UTF-16 — so they are read with
+`GetPrivateProfileStringW`, exactly the way `themeui.dll` reads them. A
+`DisplayName` that starts with `@` is an indirect string
+(`@%SystemRoot%\System32\themeui.dll,-2060`, which is what every inbox theme
+uses) and is resolved with `SHLoadIndirectString`, so a localised Windows shows
+localised theme names.
+
+### Which files are offered
+
+| Directory | Why |
+|---|---|
+| `%LOCALAPPDATA%\Microsoft\Windows\Themes` | Per-user themes. Scanned **one level deep**, because wallpaper packs (Spotlight's `Flower (d)`, for instance) keep their `.theme` inside a subfolder whose name ends in `.theme`'s parent — the folder is not the theme, the file inside it is. |
+| `%SystemRoot%\Resources\Themes` | Themes installed for all users. |
+| the path already configured | Even when it lives somewhere else, so a theme kept on a USB stick or in `D:\Themes` stays selectable. A path whose file has since been deleted is listed too, marked `(missing)`, so the broken entry can be seen and replaced. |
+
+`Custom.theme` is deliberately **not** listed. Windows rewrites it whenever the
+user tweaks a colour or wallpaper in Settings, and its `ThemeId` changes with
+it: offering it would give the user a moving target that is never quite the
+theme they saved.
+
+The settings dialog adds one row at the bottom of each dropdown, *Browse…*, which
+opens a file picker on the per-user theme folder and accepts any `.theme`
+anywhere. Cancelling it puts the previous selection back — the row is a command
+wearing a list item's clothes and must not be left "selected".
+
+### What "the same theme" means
+
+Comparing by path alone breaks the moment the user copies a pack or Windows
+rewrites `CurrentTheme`; comparing by `ThemeId` alone breaks for older packs that
+never had one. So a theme's identity is `ThemeId` when the file has one, and the
+path otherwise:
+
+```cpp
+struct ThemeIdentity { std::wstring themeId; std::wstring path; };
+bool SameIdentity(const ThemeIdentity&, const ThemeIdentity&);
+```
+
+Every comparison in the program — "is this already the current theme?", "did the
+user change it by hand?", "are these two dropdowns pointing at the same pack?" —
+goes through that function, with `CompareStringOrdinal(…, TRUE)` so case never
+matters on a case-insensitive filesystem.
+
+### How a pack is applied
+
+`IThemeManager2` from `themeui.dll`, CLSID `{9324DA94-50EC-4A14-A770-E90CA03E7C8F}`
+interface `{c1e8c83e-845d-4d95-81db-e283fdffc000}`. That interface has 24 methods
+and no header in the SDK, so it is declared in `src/WindowsTheme.cpp` from a
+single X-macro list — the vtable slot of `OpenTheme` (19) is asserted at compile
+time, because a wrong slot does not fail loudly, it silently calls a different
+method with the wrong signature.
+
+The call blocks for seconds: it copies the wallpaper file, rewrites the registry
+and restarts the shell's theme providers. It runs on a **dedicated STA thread**
+(`CoInitializeEx(COINIT_APARTMENTTHREADED)`, no message pump) that the scheduler
+hands single-slot jobs to, so a newer request replaces an older one instead of
+queueing behind it, and the UI thread never waits.
+
+A successful apply is then **confirmed by reading it back**:
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\CurrentTheme` must point
+at the file that was applied, polled for two seconds. Trusting the call to have
+worked is how a "switched" theme that did not switch goes unnoticed.
+
+### If the pack cannot be applied
+
+`LS_DISABLE_THEME_COM=1` in the environment, or a machine where the COM class
+refuses to activate, disables the pack path. The program then says so in the log
+(*"Pack could not be applied; falling back to the light/dark mode in the file."*)
+and writes only `SystemUsesLightTheme` / `AppsUseLightTheme` from the pack's
+`[VisualStyles]` section. Colours change; wallpaper, cursor and sounds do not. It
+does not claim the switch succeeded.
+
+### Telling our own apply from the user's
+
+Windows rewrites `CurrentTheme` to `Custom.theme` while a pack is being applied —
+both the path *and* the id change — so a naive comparison sees "the user changed
+the theme" immediately after every apply and enters manual-override mode
+forever. Three escape hatches sit in front of the real comparison, in this order:
+
+1. the identity already matches the target — on schedule, nothing to do;
+2. less than **30 s** since our own apply — attribute it to ourselves;
+3. the identity still equals the pack we last wrote — Windows merely re-spelled
+   the path.
+
+Only after all three does a different theme count as "the user did it", which
+suspends automatic switching until the next boundary. A target whose *file* has
+disappeared is treated differently: it is a configuration error, not the user
+taking over, so the scheduler backs off for 30 minutes and logs it once.
+
+### Diagnostics
+
+```
+LightSwitchStandalone.exe --dump-themes themes.tsv
+LightSwitchStandalone.exe --theme-check check.txt
+```
+
+`--dump-themes` prints one line per theme: path, `ThemeId`, `SystemMode`,
+`AppMode`, whether it came from the user directory, whether the file is missing,
+and whether it is the current one. `--theme-check` reports whether the COM class
+activates, how many themes `IThemeManager2` reports, and the identity Windows is
+running right now — the three facts needed to tell "our catalogue is wrong" from
+"the apply is wrong". Both write UTF-8 with a BOM.
+
+### Migration from 1.3.x
+
+A 1.3.x `settings.json` has neither `themeA` nor `themeB`. If either of the old
+checkboxes was on, `themeA` is seeded with the theme Windows is currently running
+and `themeB` is left empty, and the log says so once:
+
+```
+[Config] Migrated from 1.3.x: themeA="C:\…\Custom.theme". Choose the dark-side theme in Settings.
+```
+
+Nothing is written to disk by the migration — the seeding is in memory and only
+reaches the file when the user presses *Save*. Until then the dark side is
+unconfigured and automatic switching stays idle, which is what 1.3.x did when
+neither target was ticked.
+
 ## Architecture
 
 One process, several threads — deliberately *not* the upstream
@@ -257,21 +422,27 @@ One process, several threads — deliberately *not* the upstream
 | Thread | File | Responsibility |
 |---|---|---|
 | UI / message loop | `App.cpp`, `TrayIcon.cpp`, `HotkeyManager.cpp`, `SettingsDialog.cpp`, `dark/` | Tray icon, `WM_HOTKEY`, `WM_POWERBROADCAST`, the modal settings dialog, and all dark-mode handling. Never touches the registry. |
-| Scheduler worker | `Scheduler.cpp`, `StateManager.cpp`, `ThemeEngine.cpp` | Minute ticks, state machine, all registry writes and broadcasts, night-light watcher lifecycle. |
+| Scheduler worker | `Scheduler.cpp`, `StateManager.cpp`, `ThemeEngine.cpp` | Minute ticks, state machine, external-change detection, night-light watcher lifecycle, and the two registry fallbacks (`SetSystemTheme` / `SetAppsTheme`). |
+| Theme COM worker (STA) | `WindowsTheme.cpp` | The only place `IThemeManager2` is called: one job at a time, newest wins, `CoInitializeEx(COINIT_APARTMENTTHREADED)` without a message pump. Started on first use, joined in `Shutdown()`. |
 | Night-light observer | `vendor/NightLightRegistryObserver.h` | `RegNotifyChangeKeyValue` loop; signals the worker. |
 | Settings watcher | `Config.cpp` | `ReadDirectoryChangesW` + debounce + content comparison; signals the worker. |
 
-**The single most important rule:** `SetSystemTheme` / `SetAppsTheme` end with a
+**The single most important rule:** nothing that applies a theme may run on the
+UI thread. Applying a pack blocks for seconds inside `OpenTheme` (wallpaper copy
+plus a shell theme reload), and the registry fallback ends with a
 `SendMessageTimeout(HWND_BROADCAST, ..., SMTO_ABORTIFHUNG, 5000)` broadcast that
-can block for seconds. It is therefore called *only* from the scheduler worker.
-The hotkey and the tray command post an event, they never apply a theme inline.
+can block for five more. The scheduler therefore hands pack applies to the STA
+worker and does the fallback itself; the hotkey and the tray commands only post
+an event.
 
 ```
 main.cpp            single instance, command line, message loop bootstrap
 App.{h,cpp}         tray, hotkey, dialogs, lifecycle, Windows integration
 Scheduler.{h,cpp}   worker thread + wait set + external-change detection
 StateManager.{h,cpp} decision logic (port of upstream LightSwitchStateManager)
-ThemeEngine.{h,cpp} ApplyTheme() wrapper honouring changeSystem / changeApps
+ThemeEngine.{h,cpp} ThemeTarget + ApplyThemeTarget(): pack first, registry fallback
+ThemeCatalog.*      .theme enumeration, INI parsing, ThemeIdentity comparison
+WindowsTheme.*      the IThemeManager2 declaration and its STA worker
 Config.{h,cpp}      settings.json model, atomic write, content-compared watcher
 Json.{h,cpp}        minimal JSON reader/writer (object/array/string/number/bool)
 Logging.{h,cpp}     OutputDebugString + UTF-16 log file, thread safe
@@ -495,8 +666,8 @@ name.
 
 | Behaviour | Upstream | Verified by |
 |---|---|---|
-| Registry targets | `SystemUsesLightTheme`, `AppsUseLightTheme` under `HKCU\...\Themes\Personalize` | `vendor/ThemeHelper.cpp` is verbatim |
-| Broadcast sequence | `WM_SETTINGCHANGE`+`ImmersiveColorSet`, then `WM_THEMECHANGED`, `SMTO_ABORTIFHUNG`/5000 ms | ditto |
+| Registry targets | `SystemUsesLightTheme`, `AppsUseLightTheme` under `HKCU\...\Themes\Personalize` | `vendor/ThemeHelper.cpp` is verbatim — but since 1.4.0 these are written only by the fallback path; normally the `.theme` pack sets them |
+| Broadcast sequence | `WM_SETTINGCHANGE`+`ImmersiveColorSet`, then `WM_THEMECHANGED`, `SMTO_ABORTIFHUNG`/5000 ms | ditto (fallback path) |
 | `ColorPrevalence` reset | Only when switching **to light** | ditto |
 | Sunrise/sunset | NOAA algorithm, zenith 90.833, local-time conversion via `GetTimeZoneInformation` | `vendor/ThemeScheduler.cpp` is verbatim |
 | Cross-midnight schedules | `ShouldBeLight` normalises into `[0,1439]` and handles wrap-around | `vendor/LightSwitchUtils.h` is verbatim |
@@ -504,7 +675,7 @@ name.
 | Manual override | Hotkey flips the theme and toggles the override flag; automatic switching resumes when a schedule boundary is crossed | ported 1:1 |
 | Off mode | Early-out, does not touch the cached boundaries | ported 1:1 |
 | Tick alignment | Wakes at the top of each wall-clock minute | ported 1:1 |
-| External change detection | If the registry no longer matches the schedule, enter manual override instead of fighting the user | ported 1:1 |
+| External change detection | If the registry no longer matches the schedule, enter manual override instead of fighting the user | ported 1:1, but the comparison is on theme identity rather than two booleans — see *Themes* |
 | Sleep/wake catch-up | Cached theme state is compared to the real one, so a missed transition is applied on the next tick | ported 1:1 |
 | Default shortcut | `Ctrl+Win+Shift+D` | `Config.h` / `Config::Serialize` |
 
@@ -520,14 +691,17 @@ name.
 | Win key is a separate checkbox in the dialog | `msctls_hotkey32` cannot represent `MOD_WIN` at all. | You set "Include Win key" plus the rest of the combination. |
 | `settings.json` lives next to the exe, not under `%LOCALAPPDATA%` | Portable/green distribution. | Delete the folder = uninstall. |
 | Autostart uses `HKCU\...\Run`, not a scheduled task | PowerToys uses a scheduled task because it can start elevated; a portable app cannot create one without elevation, and the path would break on relocation. | Visible in Task Manager's Startup tab. |
-| Toggle shortcut only flips *enabled* targets | Upstream's module interface did the same, but silently. | If neither "Windows system" nor "Applications" is enabled, the toggle logs a warning and does nothing; the dialog warns before saving that configuration. |
+| Toggle shortcut only flips *enabled* targets | Upstream's module interface did the same, but silently. | Since 1.4.0 both sides are just theme paths: if either is empty the toggle logs a warning and does nothing, and the dialog refuses to save an incomplete pair while the schedule is on. |
+| **Whole theme packs instead of two registry DWORDs** | The request that produced 1.4.0: "switch Windows themes, not light/dark". A pack is a superset, and `SystemUsesLightTheme` / `AppsUseLightTheme` end up set exactly as the pack says. | Wallpaper, cursor, sounds and accent colour now change too. The two "apply to" checkboxes are gone; `changeSystem` / `changeApps` stay in the file untouched so a downgrade still behaves. See *Themes*. |
+| **A dedicated STA thread for `IThemeManager2`** | `OpenTheme` blocks for seconds while it copies the wallpaper and restarts the shell's theme providers. Doing that on the scheduler worker would stall the minute tick; doing it on the UI thread would freeze the tray. | One apply at a time, and a newer request replaces an older one instead of queueing. The thread is started on first use and joined in `Shutdown()`. |
 | Everything that touches the theme runs off the UI thread | PowerToys' hotkey handler ran on the hook thread; here the UI thread must stay responsive. | Rapid toggling coalesces into one pending toggle. |
 | Interface strings live in a compiled-in table, not in Win32 string resources | One source of truth per string, and no `.rc` code page to get wrong for non-ASCII. Upstream has no localisation at all. | Translating means editing `src/L10n.cpp` and rebuilding; there is no satellite DLL to drop in. See *Localisation*. |
 | The dialog template carries no text | The same single-source-of-truth reason. Each label needs a real control id so it can be set at `WM_INITDIALOG`. | `LightSwitch.rc` is geometry + ids; the English wording survives only as comments. |
 | The button row and over-long labels are laid out at runtime | Translated labels have different widths, and CJK labels are wider than they look. | No more `Restore defaults` overlapping `Save`, and a translated label is widened rather than clipped. |
 | The dialog has an **Interface theme** group that upstream does not have | Upstream has no dark-mode support at all — it is a WinUI page and gets its theme from PowerToys. | One more dropdown and one more `settings.json` key. Nothing about the scheduling behaviour changes. |
 | Both time pickers use `DTS_UPDOWN` instead of a drop-down calendar | The calendar panel cannot be darkened. | Up/down spinner instead of a calendar. The values, the `DTN_DATETIMECHANGE` notification and the stored format are unchanged. |
-| The interface can be pinned light or dark regardless of the schedule | The schedule decides what Windows looks like; `uiTheme` decides what *this application's* windows look like. Conflating them would make the settings dialog change colour when you are trying to configure the schedule. | `uiTheme` is independent of `changeSystem` / `changeApps` / `scheduleMode`. |
+| The interface can be pinned light or dark regardless of the schedule | The schedule decides what Windows looks like; `uiTheme` decides what *this application's* windows look like. Conflating them would make the settings dialog change colour when you are trying to configure the schedule. | `uiTheme` is independent of `themeA` / `themeB` / `scheduleMode`. |
+| The two theme dropdowns reuse the rectangle the "apply to" group had | The dialog is 397 dlu, already 1040 px at 125% scaling against a 1020 px work area. A new group would have pushed the button row behind the taskbar. | Two one-line combo boxes, one dlu apart, in 42 dlu of height. The labels are the shortest words that still read correctly in both languages. |
 
 ---
 
@@ -535,6 +709,9 @@ name.
 
 | Risk | Mitigation in this code |
 |---|---|
+| **`IThemeManager2` is an undocumented COM interface.** There is no SDK header for it, so the vtable is described by hand — and a wrong slot does not fail loudly, it calls a different method with the wrong signature. | The declaration is generated from a single X-macro list, and the slot of `OpenTheme` (19) plus the total method count (24 + `IUnknown`) are `static_assert`ed. A successful apply is then confirmed by polling `CurrentTheme` for two seconds, so "the call returned" is never mistaken for "the theme changed". If the class will not activate at all, the light/dark fallback runs and says so. |
+| **Applying a pack is slow and not cancellable.** `OpenTheme` copies the wallpaper and restarts the shell's theme providers; a large 4K image takes noticeably longer than a solid colour. | It runs on its own STA thread with a one-slot queue, so the UI stays responsive and a second request replaces the first rather than queueing. The dialog's *Toggle now* returns immediately. |
+| **A `.theme` file is not valid UTF-16.** On the machines tested it is single-byte CP936 with no BOM; some inbox themes are UTF-16LE with one. | It is never decoded by hand: `GetPrivateProfileStringW` / `GetPrivateProfileSectionW` handle all three encodings, which is exactly what `themeui.dll` itself uses. A `[Theme] DisplayName` starting with `@` is resolved with `SHLoadIndirectString`. |
 | **Night Light blob parsing is undocumented.** `IsNightLightEnabled()` reads a `REG_BINARY` CloudStore value and requires `data[23] == 0x10 && data[24] == 0x00`. The offset can change with a Windows update. | Failure to open the key, a short value, or a read error all return `false` (treated as "Night Light off"), never an error. Only affects `FollowNightLight` mode. If it ever misbehaves, use Fixed hours or Sunset to sunrise. |
 | **`MOD_WIN` hotkeys are reserved by the OS.** MS Learn states that shortcuts involving the Windows key are reserved; `RegisterHotKey` can fail. | `HotkeyManager` tries `RegisterHotKey` first and falls back to a `WH_KEYBOARD_LL` hook that reproduces what the PowerToys Runner did. The hook callback only compares modifiers and `PostMessage`s — no blocking work. On the test machine `RegisterHotKey` with `MOD_WIN` actually succeeded, so the hook stays dormant. |
 | **Shell surfaces may not repaint after the broadcast.** Taskbar/Start occasionally cache the theme. | The tray menu offers *Restart Explorer (refresh shell)*, which first sends `SHChangeNotify(SHCNE_ASSOCCHANGED)` (cheap, non-destructive) and only restarts Explorer after an explicit confirmation dialog. Explorer is never killed silently. |
@@ -574,11 +751,16 @@ name.
 
 ### 这是什么
 
-一个独立运行的 Windows 托盘小工具，按时间计划或日出日落自动切换系统的浅色/深色主题。
+一个独立运行的 Windows 托盘小工具，按时间计划或日出日落在你挑的**两个 Windows
+主题包**（`.theme` 文件）之间自动互切。所谓主题包是整套外观：壁纸、配色、鼠标
+指针、声音、强调色，浅色/深色模式本身就写在包里（`[VisualStyles]` 段）。
 它从 Microsoft PowerToys 的 **Light Switch** 模块中抽取而来，但**不依赖 PowerToys**：
 不需要 PowerToys 本体、Runner、设置界面，也不需要 vcpkg / NuGet / VC++ 运行库。
 
 交付物就是一个 exe。**拷到任何地方直接运行，删掉目录就是卸载。**
+
+> 1.3.x 及以前切的是两个注册表值（浅色/深色**模式**）。1.4.0 起改成切主题包，
+> 模式是主题包的一部分，所以原来那两个勾选框已经没有意义，被换成了两个主题下拉框。
 
 ### 基本用法
 
@@ -590,21 +772,62 @@ name.
 ```
 LightSwitchStandalone.exe               常驻通知区域运行
 LightSwitchStandalone.exe --settings    运行并立即打开设置对话框
-LightSwitchStandalone.exe --toggle      按当前设置切换一次主题后退出
-LightSwitchStandalone.exe --light       强制切到浅色主题后退出
-LightSwitchStandalone.exe --dark        强制切到深色主题后退出
+LightSwitchStandalone.exe --toggle      切到另一个主题包后退出
+LightSwitchStandalone.exe --light       应用浅色一侧的主题包后退出
+                                        （--theme-a 同义）
+LightSwitchStandalone.exe --dark        应用深色一侧的主题包后退出
+                                        （--theme-b 同义）
+LightSwitchStandalone.exe --theme 文件  应用任意一个 .theme 文件后退出
 LightSwitchStandalone.exe --lang 代码   仅在本次运行强制使用指定界面语言
                                         （auto | en-US | zh-CN）
 LightSwitchStandalone.exe --dump-strings 文件
                                         把所有界面字符串导出到该文件后退出
+LightSwitchStandalone.exe --dump-themes 文件
+                                        把能看到的全部主题导出后退出
+LightSwitchStandalone.exe --theme-check 文件
+                                        探测 IThemeManager2 并写出结果后退出
 LightSwitchStandalone.exe --help        显示以上说明
 ```
+
+一次性命令的退出码：`0` 应用成功**或本来就是这个主题**，`2` 该侧没配主题，
+`3` 主题文件不存在，`4` 应用失败 —— 脚本能分清「没事可做」和「坏了」。
+
+### 两个主题怎么选
+
+1. 打开设置对话框，第二个分组「主题对」里有 **浅色：** 和 **深色：** 两个下拉。
+2. 下拉里列的是 `%LOCALAPPDATA%\Microsoft\Windows\Themes`（含一层子目录，
+   Spotlight 壁纸包的主题就藏在子目录里）和 `%SystemRoot%\Resources\Themes`
+   里的全部 `.theme`，再加上你已经配过的那个路径（即使它在别处）。
+   最后一行是 **浏览…**，可以挑任意位置的 `.theme` 文件。
+3. `Custom.theme` **不会**列出来：Windows 一改配色就把它重写一遍，里面的
+   `ThemeId` 也跟着变，列出来等于给你一个永远在动的目标。
+4. 下拉右边那两行是状态：**当前：** 是 Windows 此刻在用的主题，**目标：** 是按
+   你现在的设置、这一刻该用的那个主题。改了模式、时间或经纬度，它会立刻跟着变。
+5. 保存时的三条校验：
+   - 计划开着（模式不是「已关闭」）却有一侧没选 → 拦住，要求两个都选；
+   - 选中的文件已经不存在 → 只问一句「仍然保存吗」，不硬拦（可能只是那块盘没插）；
+   - 两侧选成同一个主题 → 问一句，因为切换将没有任何可见变化。
+6. 存在 `settings.json` 的 `themeA` / `themeB` 里，是**绝对路径**：
+
+   ```json
+   { "themeA": { "value": "C:\\Users\\你\\AppData\\Local\\Microsoft\\Windows\\Themes\\浅色1.theme" },
+     "themeB": { "value": "C:\\Users\\你\\AppData\\Local\\Microsoft\\Windows\\Themes\\深色1.theme" } }
+   ```
+
+   空字符串表示「还没选」，这时自动切换会**什么都不做**，而不是猜一个。
+7. 从 1.3.x 升级不需要手改文件：只要原来勾了任意一个「生效范围」，
+   程序会把 `themeA` 预填成当前正在用的主题、`themeB` 留空，并在日志里写一行
+   `Migrated from 1.3.x: …`。这个预填**只存在内存里**，你点「保存」才会落盘。
+
+托盘菜单里也有 **浅色主题：名称** / **深色主题：名称** 两行，正在用的那个前面有
+圆点，没配的那一侧是灰的。点一下就直接切过去，并进入手动覆盖状态
+（计划不会在下一分钟把它改回去）。
 
 ### 界面语言怎么设
 
 1. **默认跟随 Windows。** 程序读的是 Windows 显示语言（就是「设置 > 时间和语言 >
    语言」里选的那个），不是系统区域格式。
-2. **想手动指定**，打开设置对话框，最后一个分组「界面语言」，下拉选
+2. **想手动指定**，打开设置对话框，倒数第二个分组「界面语言」，下拉选
    `跟随 Windows` / `English` / `简体中文`，然后点「保存」。
 3. **切换立即生效，不用重启**：保存后对话框会当场用新语言重建，下拉框本身也会变成
    新语言，一眼就能看出成功。
@@ -714,3 +937,11 @@ explorer 被外部杀掉或自己崩掉。
 * **任务栏颜色没变？** 部分外壳界面会缓存主题。用托盘菜单里的
   「重启资源管理器（刷新外壳）」——它会先发一个无破坏性的刷新通知，只有你确认后才真的
   重启 Explorer，绝不会静默杀掉它。
+* **切了主题，但壁纸/鼠标指针没变？** 说明主题包没能通过 `IThemeManager2` 应用，
+  程序退回了「只改浅色/深色两个注册表值」的降级路径，日志里会有一行
+  `Pack could not be applied … falling back to the light/dark mode in the file.`。
+  先跑 `--theme-check 结果.txt` 看看 COM 能不能起来。
+* **我的主题没出现在下拉里？** 它可能不在那两个标准目录里，也可能是个文件夹
+  （壁纸包）而不是 `.theme` 文件。用下拉最后一行的 **浏览…** 直接挑文件；
+  挑过之后，即使文件在别处也会一直留在列表里。文件被删掉的话，会显示成
+  `名称（缺失）`，提醒你换一个。

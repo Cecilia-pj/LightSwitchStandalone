@@ -7,6 +7,113 @@ versioning follows the upstream PowerToys Light Switch module's schema — the
 on-disk `settings.json` contract is versioned separately from this file and is
 only ever extended additively.
 
+## [1.4.0] - 2026-10-22
+
+The schedule switches **Windows themes** instead of flipping two registry
+DWORDs. Instead of "light mode / dark mode" you now pick two `.theme` packs,
+and the whole pack travels with the switch: wallpaper, colours, cursor, sounds
+and accent colour.
+
+This is a behaviour change, not an addition. Anything that relied on the old
+meaning of the two checkboxes is gone; see *Migration* below.
+
+### Changed
+
+* **The two "apply to" checkboxes are replaced by two theme dropdowns.** The
+  group holds *Light:* and *Dark:* instead of *Change the Windows theme* and
+  *Change the application theme*. A `.theme` pack carries `SystemMode` and
+  `AppMode` inside itself, so the pair of booleans has nothing left to decide.
+  The new group fills exactly the rectangle the old one occupied, so the dialog
+  keeps its height — at 125% on a 1080p screen it is already 1040 px against a
+  1020 px work area, and one more row would put the button row behind the
+  taskbar.
+* **Every dropdown entry is a real file.** The list is
+  `%LOCALAPPDATA%\Microsoft\Windows\Themes` (recursively, one level, because
+  wallpaper packs such as Spotlight keep their `.theme` in a subfolder) plus
+  `%SystemRoot%\Resources\Themes`, plus the path already configured even when it
+  lives somewhere else, plus a trailing **Browse…** row that opens a file
+  picker. `Custom.theme` is skipped: Windows rewrites it behind your back and
+  its `ThemeId` changes with it, so listing it would offer a moving target.
+* **The status line reads `Now: … / Target: …`.** *Now* is the theme
+  `CurrentTheme` points at, re-read each time the dialog repaints, so a theme
+  changed from Windows Settings while the dialog was open is reflected. *Target*
+  is the pack the schedule is asking for at this minute, derived from the
+  controls on screen with the same rules the scheduler uses. With the schedule
+  off it names whichever pack is currently on screen, which is the side a
+  manual toggle would leave.
+* **The tray menu gained two rows.** *Light theme: …* and *Dark theme: …*, each
+  bulleted when Windows is running it, each disabled when that side is not
+  configured. Choosing one enters manual-override mode, exactly like the
+  toggle, so the schedule does not undo an explicit "this one, now" a minute
+  later.
+* **The tooltip names the current pack** after the schedule summary. The mode
+  tells you when it will switch; it never told you what you were looking at.
+* Applying a pack is done through `IThemeManager2` (`themeui.dll`,
+  `{9324DA94-50EC-4A14-A770-E90CA03E7C8F}`) on a dedicated STA thread. The call
+  blocks for seconds — it copies the wallpaper and restarts the shell's theme
+  providers — so it never runs on the UI thread.
+
+### Added
+
+* `"themeA"` / `"themeB"` in `settings.json`: absolute paths to the two packs.
+  An empty string means "not chosen yet", and automatic switching then stays
+  idle rather than guessing.
+* Two commands for scripts and for diagnosing a machine where the pack does not
+  apply:
+
+  ```
+  LightSwitchStandalone.exe --dump-themes  FILE.tsv
+  LightSwitchStandalone.exe --theme-check  FILE.txt
+  ```
+
+  `--dump-themes` lists every theme the catalogue can see, with its `ThemeId`,
+  `SystemMode`/`AppMode` and whether it is the current one. `--theme-check`
+  probes the COM class and reports the interface version, the theme count and
+  the identity Windows is currently running.
+* `--theme FILE` applies one `.theme` file once and exits, without touching the
+  configuration.
+* `--theme-a` / `--theme-b` as synonyms for `--light` / `--dark`, which are
+  kept.
+
+### Fixed
+
+* **A theme changed by hand is no longer fought every minute.** The old code
+  compared two booleans, which cannot tell "the user picked another theme" from
+  "Windows re-spelled the path" from "our own apply is still settling". The
+  comparison is now on identity — `ThemeId` when both files have one, path
+  otherwise — with a 30 s grace window after our own apply, because Windows
+  rewrites `CurrentTheme` to `Custom.theme` when a pack is applied and both the
+  id and the path change while it does.
+* A pack whose file has disappeared is treated as a configuration error: the
+  scheduler backs off for 30 minutes and logs it once, instead of entering
+  manual-override mode and permanently standing down.
+* `%SystemRoot%\Resources\Themes` is honoured. Themes installed for all users
+  were previously invisible to everything that enumerated themes.
+
+### Migration
+
+* A 1.3.x `settings.json` needs no editing. When neither `themeA` nor `themeB`
+  is present and either of the old checkboxes was on, `themeA` is seeded with
+  the theme Windows is currently running and `themeB` is left empty — the
+  message *"Migrated from 1.3.x: themeA=… Choose the dark-side theme in
+  Settings."* is logged once. Nothing is written to disk until you press Save.
+* `"changeSystem"` and `"changeApps"` are still round-tripped untouched. They
+  no longer drive anything, but leaving them alone is what lets a downgrade to
+  1.3.x behave the way that file says.
+* **If COM cannot be used** (a locked-down machine, or `themeui.dll` refusing
+  to activate), the pack cannot be applied. The program says so —
+  `Pack could not be applied; falling back to the light/dark mode in the file.`
+  — and writes only `SystemUsesLightTheme` / `AppsUseLightTheme` from the
+  pack's `[VisualStyles]` section, which changes colours but not wallpaper,
+  cursor or sounds. It does not pretend the switch succeeded.
+
+### Notes
+
+* `settings.json` remains additive: a PowerToys file still loads, and the keys
+  this program does not model are still dropped on save, as before.
+* `--dump-themes` and `--theme-check` write UTF-8 with a BOM so a plain
+  `Get-Content` or `type` shows them correctly.
+
 ## [1.3.1] - 2026-10-10
 
 The tray icon no longer disappears when `explorer.exe` restarts.

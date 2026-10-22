@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <!-- Keep this in step with the VERSIONINFO block in LightSwitch.rc. -->
-  <assemblyIdentity type="win32" name="LightSwitchStandalone" version="1.3.1.0" processorArchitecture="*" />
+  <assemblyIdentity type="win32" name="LightSwitchStandalone" version="1.4.0.0" processorArchitecture="*" />
   <description>Light Switch Standalone</description>
 
   <!-- Common Controls v6: required for SysDateTimePick32 and msctls_hotkey32
