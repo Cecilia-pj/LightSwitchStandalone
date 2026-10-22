@@ -263,7 +263,14 @@ void App::ApplyHotkeyFromConfig()
 void App::BuildTrayMenuState(TrayMenuState& state)
 {
     const Config config = SettingsStore::Instance().Get();
-    const theme::ThemeIdentity current = m_scheduler.State().GetState().currentTheme;
+
+    // Read from CurrentTheme rather than from the scheduler's cached identity.
+    // The cache is filled by the worker thread, which may not have finished its
+    // first sync when this program is a second old - and a menu with no bullet
+    // on either row looks like the feature does not work rather than like a
+    // race. The registry is the authority anyway; the cache exists so the
+    // minute tick does not have to re-read it.
+    const theme::ThemeIdentity current = theme::ReadCurrentIdentity();
 
     // A configured path whose file has since disappeared still gets a row: the
     // user has to be able to see that the pack they picked is gone, and the
@@ -308,8 +315,14 @@ void App::UpdateTooltip()
     // The pack that is on screen. With two arbitrary packs the schedule mode
     // says nothing about what the machine looks like, and the names the user
     // gave them are the only label that means anything.
-    if (!state.currentTheme.path.empty())
-        tooltip += L10n::F(Str::TooltipTheme, theme::DisplayNameOfPath(state.currentTheme.path));
+    //
+    // CurrentTheme, not the scheduler's cache: this runs once at startup, and
+    // the worker may not have completed its first sync yet. A tooltip that only
+    // grows the theme name after the next event would look like the feature is
+    // missing.
+    const theme::ThemeIdentity current = theme::ReadCurrentIdentity();
+    if (!current.path.empty())
+        tooltip += L10n::F(Str::TooltipTheme, theme::DisplayNameOfPath(current.path));
 
     if (state.isManualOverride)
         tooltip += L10n::T(Str::TooltipManualOverride);
