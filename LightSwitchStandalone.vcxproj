@@ -135,6 +135,7 @@
     </ClCompile>
     <ClCompile Include="src\vendor\ThemeHelper.cpp" />
     <ClCompile Include="src\vendor\ThemeScheduler.cpp" />
+    <ClCompile Include="src\WindowsTheme.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -162,6 +163,7 @@
     <ClInclude Include="src\vendor\SettingsConstants.h" />
     <ClInclude Include="src\vendor\ThemeHelper.h" />
     <ClInclude Include="src\vendor\ThemeScheduler.h" />
+    <ClInclude Include="src\WindowsTheme.h" />
   </ItemGroup>
 
   <ItemGroup>

@@ -10,6 +10,7 @@
 //   --lang CODE         override the interface language for this run only
 //   --dump-strings FILE write every interface string to FILE and exit
 //   --dump-themes FILE  write every .theme found to FILE as TSV and exit
+//   --theme-check FILE  probe IThemeManager2 and write the verdict to FILE
 //   --help              show this text
 #include "App.h"
 
@@ -19,6 +20,7 @@
 #include "Text.h"
 #include "ThemeCatalog.h"
 #include "ThemeEngine.h"
+#include "WindowsTheme.h"
 #include "dark/DarkApp.h"
 #include "vendor/ThemeHelper.h"
 
@@ -98,6 +100,29 @@ std::wstring BuildThemeDump()
     return text;
 }
 
+// The one diagnostic that answers "can this machine apply a theme at all?"
+// without changing the desktop: create the manager, initialise it, and read
+// the theme count - the cheapest proof the declared vtable matches.
+std::wstring BuildThemeCheckReport()
+{
+    const bool ready = ls::ProbeThemeManager();
+    const ls::theme::ThemeIdentity current = ls::theme::ReadCurrentIdentity();
+
+    std::wstring text;
+    text += L"com = ";
+    text += ready ? L"ok" : L"unavailable";
+    text += L"\r\nthemes = ";
+    text += std::to_wstring(ls::ThemeManagerThemeCount());
+    text += L"\r\ncurrent = ";
+    text += current.path.empty() ? std::wstring(L"(none)") : current.path;
+    text += L"\r\ncurrent id = ";
+    text += current.themeId.empty() ? std::wstring(L"(none)") : current.themeId;
+    text += L"\r\n";
+
+    ls::ShutdownStaWorker();
+    return text;
+}
+
 bool ApplyOneShot(OneShot mode)
 {
     const ls::Config config = ls::SettingsStore::Instance().Get();
@@ -150,6 +175,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
     std::wstring languageOverride;
     std::wstring dumpPath;
     std::wstring themeDumpPath;
+    std::wstring themeCheckPath;
 
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -181,6 +207,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
             else if (_wcsicmp(argument.c_str(), L"--dump-themes") == 0 && i + 1 < argc)
             {
                 themeDumpPath = argv[++i];
+            }
+            else if (_wcsicmp(argument.c_str(), L"--theme-check") == 0 && i + 1 < argc)
+            {
+                themeCheckPath = argv[++i];
             }
             else if (_wcsicmp(argument.c_str(), L"--help") == 0 || _wcsicmp(argument.c_str(), L"/?") == 0)
             {
@@ -232,6 +262,17 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
             return 3;
         }
         return 0;
+    }
+
+    if (!themeCheckPath.empty())
+    {
+        const std::wstring report = BuildThemeCheckReport();
+        if (!WriteUtf8File(themeCheckPath, report))
+        {
+            LOG_ERROR(L"[main] Could not write the theme check to " << themeCheckPath << L".");
+            return 3;
+        }
+        return report.find(L"com = ok") != std::wstring::npos ? 0 : 4;
     }
 
     if (showHelp)

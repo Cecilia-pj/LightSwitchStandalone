@@ -204,7 +204,26 @@ int CompareNames(const std::wstring& a, const std::wstring& b)
 }
 
 void CollectFromDirectory(const std::wstring& directory, bool fromUserDir,
-                          std::vector<ThemeInfo>& out, size_t maxThemes)
+                          std::vector<ThemeInfo>& out, size_t maxThemes, int depth);
+
+void AddThemeFile(const std::wstring& filePath, bool fromUserDir,
+                  std::vector<ThemeInfo>& out, size_t maxThemes)
+{
+    if (out.size() >= maxThemes)
+        return;
+
+    ThemeInfo info = DescribePathUncached(filePath);
+    info.fromUserDir = fromUserDir;
+    out.push_back(std::move(info));
+}
+
+// Windows Spotlight's wallpaper packs live one level down, in a folder named
+// after the pack, and hold a real .theme each ("Flower (d\Flower (d.theme").
+// They are ordinary themes with a ThemeId and a SystemMode, and the Settings
+// app lists them, so skipping the subdirectories would leave visible themes
+// unreachable from this program. One level is all Windows uses.
+void CollectFromDirectory(const std::wstring& directory, bool fromUserDir,
+                          std::vector<ThemeInfo>& out, size_t maxThemes, int depth)
 {
     if (directory.empty())
         return;
@@ -212,34 +231,61 @@ void CollectFromDirectory(const std::wstring& directory, bool fromUserDir,
     WIN32_FIND_DATAW data{};
     const std::wstring pattern = directory + L"\\*.theme";
     HANDLE find = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &data,
-                                  FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+                                   FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
     if (find == INVALID_HANDLE_VALUE)
     {
         LOG_DEBUG(L"[ThemeCatalog] No .theme files in " << directory
                                                         << L" (error " << GetLastError() << L").");
-        return;
     }
+    else
+    {
+        do
+        {
+            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+                continue;
+            if (EqualsIgnoreCase(data.cFileName, kCustomThemeFileName))
+            {
+                LOG_DEBUG(L"[ThemeCatalog] Skipping " << data.cFileName << L": Windows rewrites it behind our back.");
+                continue;
+            }
+
+            if (out.size() >= maxThemes)
+            {
+                LOG_WARN(L"[ThemeCatalog] Listing capped at " << maxThemes << L" themes; some were skipped.");
+                break;
+            }
+
+            AddThemeFile(directory + L"\\" + data.cFileName, fromUserDir, out, maxThemes);
+        } while (FindNextFileW(find, &data));
+
+        FindClose(find);
+    }
+
+    if (depth <= 1)
+        return;
+
+    // Subdirectories of the user folder only: the system folder keeps visual
+    // styles in subdirectories, never .theme files, so scanning it again would
+    // be pure I/O for nothing.
+    if (!fromUserDir)
+        return;
+
+    const std::wstring childPattern = directory + L"\\*";
+    find = FindFirstFileExW(childPattern.c_str(), FindExInfoBasic, &data,
+                            FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (find == INVALID_HANDLE_VALUE)
+        return;
 
     do
     {
-        // The same folders also hold wallpaper packs stored as directories.
-        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
             continue;
-        if (EqualsIgnoreCase(data.cFileName, kCustomThemeFileName))
-        {
-            LOG_DEBUG(L"[ThemeCatalog] Skipping " << data.cFileName << L": Windows rewrites it behind our back.");
+        if (data.cFileName[0] == L'.')
             continue;
-        }
+        if ((data.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0)
+            continue;
 
-        if (out.size() >= maxThemes)
-        {
-            LOG_WARN(L"[ThemeCatalog] Listing capped at " << maxThemes << L" themes; some were skipped.");
-            break;
-        }
-
-        ThemeInfo info = DescribePathUncached(directory + L"\\" + data.cFileName);
-        info.fromUserDir = fromUserDir;
-        out.push_back(std::move(info));
+        CollectFromDirectory(directory + L"\\" + data.cFileName, fromUserDir, out, maxThemes, depth - 1);
     } while (FindNextFileW(find, &data));
 
     FindClose(find);
@@ -360,8 +406,8 @@ std::vector<ThemeInfo> Enumerate(const EnumerateOptions& options)
     std::vector<ThemeInfo> found;
     found.reserve(32);
 
-    CollectFromDirectory(UserThemesDirectory(), true, found, options.maxThemes);
-    CollectFromDirectory(SystemThemesDirectory(), false, found, options.maxThemes);
+    CollectFromDirectory(UserThemesDirectory(), true, found, options.maxThemes, 2);
+    CollectFromDirectory(SystemThemesDirectory(), false, found, options.maxThemes, 1);
 
     std::vector<ThemeInfo> unique;
     unique.reserve(found.size());
