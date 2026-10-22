@@ -21,6 +21,8 @@
 //   "startOnLogin":     { "value": false },    // standalone-only extension
 //   "language":         { "value": "auto" },   // standalone-only extension
 //   "uiTheme":          { "value": "auto" },   // standalone-only extension
+//   "themeA":           { "value": "C:\\...\\Light.theme" }, // standalone-only extension
+//   "themeB":           { "value": "C:\\...\\Dark.theme" },  // standalone-only extension
 //   "trayClickTogglesTheme": { "value": false } // standalone-only extension
 // }
 //
@@ -76,6 +78,12 @@ struct HotkeyConfig
 
 struct Config
 {
+    // Historic PowerToys switches for "apply to the Windows chrome" and "apply
+    // to applications". Since 1.4.0 the theme pack carries both modes, so these
+    // no longer drive anything - they are kept so a 1.3.x settings.json still
+    // round-trips byte for byte and so the upgrade migration can tell whether
+    // the user had switching enabled at all. See MigrateLegacyThemeSelection
+    // in src/Config.cpp.
     bool changeSystem = true;
     bool changeApps = true;
 
@@ -105,6 +113,18 @@ struct Config
     // same value Light Switch itself writes); "light" and "dark" pin it. See
     // src/dark/DarkApp.h.
     std::wstring uiTheme = L"auto";
+
+    // Standalone-only: the two .theme packs this program alternates between.
+    // themeA is applied during the "light" side of the schedule, themeB during
+    // the "dark" side.
+    //
+    // An empty string means "not chosen yet": automatic switching then does
+    // nothing at all, which is exactly what 1.3.x did when neither target was
+    // ticked. Storing the absolute path rather than the ThemeId keeps the file
+    // legible and lets the user move a theme and fix the entry; the ThemeId is
+    // re-read from the file every time it is needed (src/ThemeCatalog.h).
+    std::wstring themeA;
+    std::wstring themeB;
 
     // Standalone-only: whether a single left click on the tray icon toggles the
     // theme. Off by default, because a screen tap arrives as the same message a

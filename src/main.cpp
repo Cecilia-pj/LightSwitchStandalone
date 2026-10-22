@@ -105,6 +105,7 @@ std::wstring BuildThemeDump()
 // the theme count - the cheapest proof the declared vtable matches.
 std::wstring BuildThemeCheckReport()
 {
+    const ls::Config config = ls::SettingsStore::Instance().Get();
     const bool ready = ls::ProbeThemeManager();
     const ls::theme::ThemeIdentity current = ls::theme::ReadCurrentIdentity();
 
@@ -117,6 +118,12 @@ std::wstring BuildThemeCheckReport()
     text += current.path.empty() ? std::wstring(L"(none)") : current.path;
     text += L"\r\ncurrent id = ";
     text += current.themeId.empty() ? std::wstring(L"(none)") : current.themeId;
+    text += L"\r\nschedule = ";
+    text += ls::ScheduleModeToString(config.scheduleMode);
+    text += L"\r\nthemeA = ";
+    text += config.themeA.empty() ? std::wstring(L"(unset)") : config.themeA;
+    text += L"\r\nthemeB = ";
+    text += config.themeB.empty() ? std::wstring(L"(unset)") : config.themeB;
     text += L"\r\n";
 
     ls::ShutdownStaWorker();

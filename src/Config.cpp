@@ -5,6 +5,7 @@
 #include "L10n.h"
 #include "Logging.h"
 #include "Text.h"
+#include "ThemeCatalog.h"
 
 #include <shlobj.h>
 
@@ -160,6 +161,53 @@ json::Value Wrap(const json::Value& inner)
     return wrapper;
 }
 
+// A path in settings.json is hand-editable, so it can arrive with a stray
+// quote, an unresolved %LOCALAPPDATA% or a relative tail. Resolve all of that
+// once on the way in. The file is deliberately allowed not to exist: a theme
+// can live on a drive that is not plugged in today.
+std::wstring NormalizeThemePath(const std::wstring& value)
+{
+    return theme::NormalizePath(value);
+}
+
+// 1.3.x had no theme packs, only the two "apply to" booleans. Rather than
+// leaving the new fields empty and forcing every existing user through the
+// settings dialog, seed themeA with whatever theme is active right now - it is
+// the one theme the program can be sure the user has seen.
+//
+// Three deliberate constraints:
+//   * memory only, never saved here, so an upgrade cannot rewrite the file of
+//     somebody running from a read-only medium;
+//   * only when the old file had switching enabled, so a user who had turned
+//     the feature off is not silently opted back in;
+//   * themeB is left empty, because guessing a "dark" counterpart is exactly
+//     the kind of guess that produces a surprise wallpaper change.
+void MigrateLegacyThemeSelection(const json::Value& root, Config& config)
+{
+    const bool hasThemeA = root.find("themeA") != nullptr;
+    const bool hasThemeB = root.find("themeB") != nullptr;
+    if (hasThemeA || hasThemeB)
+        return; // already in the new format, nothing to infer
+
+    if (!config.changeSystem && !config.changeApps)
+    {
+        LOG_INFO(L"[Config] Legacy settings had both targets disabled; leaving themeA/themeB unset.");
+        return;
+    }
+
+    const theme::ThemeIdentity current = theme::ReadCurrentIdentity();
+    if (current.path.empty())
+    {
+        LOG_WARN(L"[Config] Legacy settings wanted switching, but no current theme could be read; "
+                 L"themeA/themeB left unset.");
+        return;
+    }
+
+    config.themeA = current.path;
+    LOG_INFO(L"[Config] Migrated from 1.3.x: themeA=\"" << config.themeA
+                                                       << L"\". Choose the dark-side theme in Settings.");
+}
+
 } // namespace
 
 std::wstring ScheduleModeToString(ScheduleMode mode)
@@ -296,6 +344,8 @@ std::string SettingsStore::Serialize(const Config& config) const
     root.set("startOnLogin", Wrap(json::Value(config.startOnLogin)));
     root.set("language", Wrap(json::Value(WideToUtf8(config.language))));
     root.set("uiTheme", Wrap(json::Value(WideToUtf8(config.uiTheme))));
+    root.set("themeA", Wrap(json::Value(WideToUtf8(config.themeA))));
+    root.set("themeB", Wrap(json::Value(WideToUtf8(config.themeB))));
     root.set("trayClickTogglesTheme", Wrap(json::Value(config.trayClickTogglesTheme)));
 
     // Key order here is irrelevant: json::Value stores objects in a std::map, so
@@ -341,6 +391,13 @@ bool SettingsStore::Deserialize(const std::string& utf8, Config& config, std::st
     // the safe value. An upgrade therefore never silently turns the touch-unfriendly
     // gesture back on.
     loaded.trayClickTogglesTheme = JsonGetBoolWrapped(root, "trayClickTogglesTheme", loaded.trayClickTogglesTheme);
+
+    // Standalone extension in 1.4.0: the two .theme packs that replace the
+    // boolean pair above. Read before the migration runs, so an existing
+    // 1.3.x file can be recognised by the absence of both keys.
+    loaded.themeA = NormalizeThemePath(JsonGetStringWrapped(root, "themeA", loaded.themeA));
+    loaded.themeB = NormalizeThemePath(JsonGetStringWrapped(root, "themeB", loaded.themeB));
+    MigrateLegacyThemeSelection(root, loaded);
 
     if (const json::Value* hotkeyEntry = root.find("toggle-theme-hotkey"); hotkeyEntry && hotkeyEntry->isObject())
     {
