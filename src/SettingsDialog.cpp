@@ -5,13 +5,18 @@
 #include "Config.h"
 #include "L10n.h"
 #include "Logging.h"
+#include "ThemeCatalog.h"
 #include "dark/DarkApp.h"
 #include "dark/darkui.h"
 #include "resource.h"
+#include "vendor/LightSwitchUtils.h"
 #include "vendor/ThemeHelper.h"
 #include "vendor/ThemeScheduler.h"
 
+// <commdlg.h> for GetOpenFileNameW - the project builds with
+// WIN32_LEAN_AND_MEAN, which takes the common dialogs out of <windows.h>.
 #include <commctrl.h>
+#include <commdlg.h>
 #include <shellapi.h>
 
 #include <algorithm>
@@ -71,11 +76,36 @@ static_assert(sizeof(kThemeComboTexts) / sizeof(kThemeComboTexts[0]) ==
                   sizeof(kThemeValues) / sizeof(kThemeValues[0]),
               "kThemeComboTexts and kThemeValues must stay in step.");
 
+// One row of a scheduled-theme dropdown. The entry is kept as a whole rather
+// than as a bare path because the identity is what decides "same theme" - two
+// files may carry the same DisplayName, and one theme may be installed twice.
+struct ThemeEntry
+{
+    std::wstring path;
+    std::wstring label;
+    theme::ThemeIdentity identity;
+};
+
+// Item data of the two non-theme rows at the bottom of a dropdown.
+constexpr LPARAM kUnsetEntry = -2;
+constexpr LPARAM kBrowseEntry = -1;
+
 struct DialogContext
 {
     ISettingsHost* host = nullptr;
     Config config;
     HFONT font = nullptr; // owned; deleted once DialogBoxParamW returns
+
+    // Filled by PopulateThemePairCombo. The combo boxes store indexes into
+    // these vectors as item data, so a duplicate label can never make the code
+    // pick the wrong file.
+    std::vector<ThemeEntry> lightEntries;
+    std::vector<ThemeEntry> darkEntries;
+
+    // Last selected row of each dropdown. Only used to roll the selection back
+    // when the file dialog behind "Browse..." is cancelled.
+    int lastSelLight = -1;
+    int lastSelDark = -1;
 };
 
 // Every control whose caption comes from the L10n table.
@@ -90,9 +120,9 @@ constexpr ControlText kControlTexts[] = {
     { IDC_STATIC_LBL_MODE, Str::DialogLabelMode },
     { IDC_STATIC_LBL_LIGHT, Str::DialogLabelLightStarts },
     { IDC_STATIC_LBL_DARK, Str::DialogLabelDarkStarts },
-    { IDC_STATIC_GROUP_APPLY, Str::DialogGroupApplyTo },
-    { IDC_CHK_SYSTEM, Str::DialogCheckSystem },
-    { IDC_CHK_APPS, Str::DialogCheckApps },
+    { IDC_STATIC_GROUP_THEMES, Str::DialogGroupThemes },
+    { IDC_STATIC_LBL_THEME_LIGHT, Str::DialogLabelLightTheme },
+    { IDC_STATIC_LBL_THEME_DARK, Str::DialogLabelDarkTheme },
     { IDC_STATIC_GROUP_SUN, Str::DialogGroupSun },
     { IDC_STATIC_LBL_LAT, Str::DialogLabelLatitude },
     { IDC_STATIC_LBL_LON, Str::DialogLabelLongitude },
@@ -536,6 +566,195 @@ void PopulateThemeCombo(HWND dialog, const std::wstring& configured)
 }
 
 // --------------------------------------------------------------------------
+// Scheduled theme pair
+// --------------------------------------------------------------------------
+//
+// Unlike the interface-theme combo above, these two are not a fixed list. The
+// rows come from the .theme files Windows can see in its two theme folders,
+// plus the path the configuration already points at (which may live anywhere),
+// plus a trailing "Browse..." row that opens a file dialog.
+//
+// The values that travel to settings.json are absolute file paths, not the
+// display names shown here: the name is only a hint for the user, while the
+// path is what actually gets applied.
+
+std::vector<ThemeEntry> BuildThemeEntries(const std::wstring& selected)
+{
+    const std::wstring wanted = theme::NormalizePath(selected);
+
+    theme::EnumerateOptions options;
+    if (!wanted.empty())
+        options.extraPaths.push_back(wanted);
+
+    std::vector<ThemeEntry> entries;
+    for (const theme::ThemeInfo& info : theme::Enumerate(options))
+    {
+        ThemeEntry entry;
+        entry.path = info.path;
+        entry.label = info.displayName;
+        entry.identity = theme::ThemeIdentity{ info.themeId, info.path };
+        if (info.fileMissing)
+            entry.label += L10n::T(Str::DialogThemeMissingSuffix);
+        entries.push_back(std::move(entry));
+    }
+
+    // Enumerate() de-duplicates by identity, so a configured path can be
+    // swallowed by an identical file that happens to share its ThemeId. The
+    // entry the user actually chose must stay selectable even then.
+    if (!wanted.empty())
+    {
+        const theme::ThemeIdentity identity = theme::IdentifyPath(wanted);
+        const bool present = std::any_of(entries.begin(), entries.end(),
+                                         [&](const ThemeEntry& entry) {
+                                             return theme::SameIdentity(entry.identity, identity);
+                                         });
+        if (!present)
+        {
+            const theme::ThemeInfo info = theme::DescribePath(wanted);
+            ThemeEntry entry;
+            entry.path = wanted;
+            entry.label = info.displayName;
+            entry.identity = theme::ThemeIdentity{ info.themeId, wanted };
+            if (info.fileMissing)
+                entry.label += L10n::T(Str::DialogThemeMissingSuffix);
+            entries.push_back(std::move(entry));
+        }
+    }
+
+    return entries;
+}
+
+void PopulateThemePairCombo(HWND dialog, int controlId, const std::wstring& selected,
+                            std::vector<ThemeEntry>& entries, int& lastSelection)
+{
+    const HWND combo = GetDlgItem(dialog, controlId);
+    if (!combo)
+        return;
+
+    entries = BuildThemeEntries(selected);
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+
+    // A fresh profile (or a 1.3.x upgrade, which can only seed the light side)
+    // has nothing to show. An empty closed combo box reads like a bug, so an
+    // explicit "(not set)" row takes the place of the missing selection.
+    int selection = -1;
+    if (selected.empty())
+    {
+        const LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0,
+                                           reinterpret_cast<LPARAM>(L10n::T(Str::CurrentThemeUnset)));
+        if (index >= 0)
+        {
+            SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index),
+                         static_cast<LPARAM>(kUnsetEntry));
+            selection = static_cast<int>(index);
+        }
+    }
+
+    const theme::ThemeIdentity wanted = selected.empty() ? theme::ThemeIdentity{}
+                                                        : theme::IdentifyPath(selected);
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        const LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0,
+                                           reinterpret_cast<LPARAM>(entries[i].label.c_str()));
+        if (index < 0)
+            continue;
+
+        SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index), static_cast<LPARAM>(i));
+        if (selection < 0 && theme::SameIdentity(entries[i].identity, wanted))
+            selection = static_cast<int>(index);
+    }
+
+    const LRESULT browseIndex = SendMessageW(combo, CB_ADDSTRING, 0,
+                                             reinterpret_cast<LPARAM>(L10n::T(Str::DialogThemeBrowse)));
+    if (browseIndex >= 0)
+        SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(browseIndex),
+                     static_cast<LPARAM>(kBrowseEntry));
+
+    lastSelection = (selection >= 0) ? selection : 0;
+    SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(lastSelection), 0);
+}
+
+// Path behind a dropdown row, or an empty string for "(not set)" and
+// "Browse...". Both sentinels are negative, and CB_ERR (-1) means the same
+// thing here, so one comparison covers all three cases.
+std::wstring ThemePathFromCombo(HWND dialog, int controlId, const std::vector<ThemeEntry>& entries)
+{
+    const HWND combo = GetDlgItem(dialog, controlId);
+    const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (index < 0)
+        return std::wstring();
+
+    const LPARAM data = SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(index), 0);
+    if (data < 0)
+        return std::wstring();
+
+    const size_t position = static_cast<size_t>(data);
+    if (position >= entries.size())
+        return std::wstring();
+    return entries[position].path;
+}
+
+bool BrowseForThemeFile(HWND dialog, std::wstring& picked)
+{
+    wchar_t buffer[32768] = {};
+    const std::wstring initial = theme::UserThemesDirectory();
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = dialog;
+    ofn.lpstrFilter = L"Theme packs (*.theme)\0*.theme\0All files (*.*)\0*.*\0\0";
+    ofn.lpstrFile = buffer;
+    ofn.nMaxFile = ARRAYSIZE(buffer);
+    ofn.lpstrTitle = L10n::T(Str::DialogThemeBrowseTitle);
+    ofn.lpstrInitialDir = initial.empty() ? nullptr : initial.c_str();
+    // OFN_NOCHANGEDIR: the process keeps a working directory for the rest of
+    // its life, and a file dialog must not move it behind our back.
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+
+    if (!GetOpenFileNameW(&ofn))
+        return false;
+
+    picked = theme::NormalizePath(buffer);
+    return !picked.empty();
+}
+
+// A selection change on one of the two dropdowns. The only case that needs
+// work is "Browse...": it is a command dressed as a list row, so it has to be
+// undone when the user cancels the file dialog.
+void HandleThemePairSelection(HWND dialog, DialogContext& context, bool lightSide)
+{
+    const int controlId = lightSide ? IDC_CMB_THEME_LIGHT : IDC_CMB_THEME_DARK;
+    std::vector<ThemeEntry>& entries = lightSide ? context.lightEntries : context.darkEntries;
+    int& lastSelection = lightSide ? context.lastSelLight : context.lastSelDark;
+
+    const HWND combo = GetDlgItem(dialog, controlId);
+    const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (index < 0)
+        return;
+
+    if (SendMessageW(combo, CB_GETITEMDATA, static_cast<WPARAM>(index), 0) != kBrowseEntry)
+    {
+        lastSelection = static_cast<int>(index);
+        return;
+    }
+
+    std::wstring picked;
+    if (!BrowseForThemeFile(dialog, picked))
+    {
+        // Cancelled. Leaving "Browse..." selected would look like a choice the
+        // next Save would then try to apply.
+        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(lastSelection), 0);
+        return;
+    }
+
+    // The file was just picked, so it can only be a few seconds old at most -
+    // well inside the catalogue's cache window.
+    theme::InvalidateCache();
+    PopulateThemePairCombo(dialog, controlId, picked, entries, lastSelection);
+}
+
+
+// --------------------------------------------------------------------------
 // Text helpers
 // --------------------------------------------------------------------------
 
@@ -679,12 +898,95 @@ void RefreshSunInfo(HWND dialog)
     SetWindowTextW(GetDlgItem(dialog, IDC_STATIC_SUN), text.c_str());
 }
 
-void RefreshCurrentStateText(HWND dialog)
+// Which side of the schedule is active at this minute. Reads the values the
+// dialog currently shows rather than the settings file, so the status line
+// follows the dropdowns and the time pickers while they are being edited.
+//
+// This mirrors Scheduler::ScheduleWantsDark() on purpose. The dialog holds no
+// scheduler handle - the worker thread owns that state, and reading it from a
+// repaint would only add a lock to the message loop - while the rules
+// themselves are four lines of arithmetic that cannot drift silently.
+bool DialogTargetsDark(HWND dialog)
 {
-    const std::wstring text = L10n::F(Str::CurrentState,
-                                      L10n::T(GetCurrentSystemTheme() ? Str::WordLight : Str::WordDark),
-                                      L10n::T(GetCurrentAppsTheme() ? Str::WordLight : Str::WordDark),
-                                      L10n::T(IsNightLightEnabled() ? Str::WordOn : Str::WordOff));
+    const ScheduleMode mode = SelectedMode(dialog);
+
+    if (mode == ScheduleMode::FollowNightLight)
+        return IsNightLightEnabled();
+
+    int light = GetTimeControl(dialog, IDC_DTP_LIGHT);
+    int dark = GetTimeControl(dialog, IDC_DTP_DARK);
+
+    if (mode == ScheduleMode::SunsetToSunrise)
+    {
+        double latitude = 0.0;
+        double longitude = 0.0;
+        int sunriseOffset = 0;
+        int sunsetOffset = 0;
+
+        const bool usable =
+            ParseDouble(GetEditText(dialog, IDC_EDT_LAT), latitude) &&
+            ParseDouble(GetEditText(dialog, IDC_EDT_LON), longitude) &&
+            ParseInt(GetEditText(dialog, IDC_EDT_SUNRISE_OFF), sunriseOffset) &&
+            ParseInt(GetEditText(dialog, IDC_EDT_SUNSET_OFF), sunsetOffset) &&
+            !(latitude == 0.0 && longitude == 0.0) &&
+            latitude >= -90.0 && latitude <= 90.0 &&
+            longitude >= -180.0 && longitude <= 180.0;
+
+        if (usable)
+        {
+            SYSTEMTIME today{};
+            GetLocalTime(&today);
+            const SunTimes times = CalculateSunriseSunset(latitude, longitude,
+                                                          today.wYear, today.wMonth, today.wDay);
+            light = times.sunriseHour * 60 + times.sunriseMinute + sunriseOffset;
+            dark = times.sunsetHour * 60 + times.sunsetMinute + sunsetOffset;
+        }
+        // Unusable coordinates fall back to the two time pickers, exactly like
+        // the scheduler does while it waits for a valid location.
+    }
+
+    return !ShouldBeLight(GetNowMinutes(), light, dark);
+}
+
+void RefreshCurrentStateText(HWND dialog, DialogContext* context)
+{
+    // Line 1: what Windows is running right now. Read from CurrentTheme rather
+    // than from the scheduler's cached identity, because the user may have
+    // switched themes from Windows Settings while this dialog was open.
+    const theme::ThemeIdentity current = theme::ReadCurrentIdentity();
+    const std::wstring nowText = current.path.empty()
+                                     ? std::wstring(L10n::T(Str::CurrentThemeUnset))
+                                     : theme::DisplayNameOfPath(current.path);
+
+    // Line 2: the pack the schedule is asking for. With the schedule off there
+    // is no such thing, so the pair is read the other way round: it names
+    // whichever of the two packs is on screen, which is the side a manual
+    // toggle would flip away from.
+    std::wstring targetText = L10n::T(Str::CurrentThemeUnset);
+    if (context)
+    {
+        bool darkSide = false;
+        if (SelectedMode(dialog) == ScheduleMode::Off)
+        {
+            const std::wstring darkPath = ThemePathFromCombo(dialog, IDC_CMB_THEME_DARK,
+                                                            context->darkEntries);
+            darkSide = !darkPath.empty() &&
+                       theme::SameIdentity(current, theme::IdentifyPath(darkPath));
+        }
+        else
+        {
+            darkSide = DialogTargetsDark(dialog);
+        }
+
+        const int controlId = darkSide ? IDC_CMB_THEME_DARK : IDC_CMB_THEME_LIGHT;
+        const std::vector<ThemeEntry>& entries = darkSide ? context->darkEntries
+                                                          : context->lightEntries;
+        const std::wstring targetPath = ThemePathFromCombo(dialog, controlId, entries);
+        if (!targetPath.empty())
+            targetText = theme::DisplayNameOfPath(targetPath);
+    }
+
+    const std::wstring text = L10n::F(Str::CurrentThemePair, nowText, targetText);
     SetWindowTextW(GetDlgItem(dialog, IDC_STATIC_CURRENT), text.c_str());
 }
 
@@ -697,7 +999,7 @@ void RefreshStartupText(HWND dialog)
 // Populate / harvest
 // --------------------------------------------------------------------------
 
-void Populate(HWND dialog, const Config& config)
+void Populate(HWND dialog, DialogContext& context, const Config& config)
 {
     SendDlgItemMessageW(dialog, IDC_CMB_MODE, CB_RESETCONTENT, 0, 0);
     for (Str label : kModeComboTexts)
@@ -708,8 +1010,10 @@ void Populate(HWND dialog, const Config& config)
     SetTimeControl(dialog, IDC_DTP_LIGHT, config.lightTime);
     SetTimeControl(dialog, IDC_DTP_DARK, config.darkTime);
 
-    CheckDlgButton(dialog, IDC_CHK_SYSTEM, config.changeSystem ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(dialog, IDC_CHK_APPS, config.changeApps ? BST_CHECKED : BST_UNCHECKED);
+    PopulateThemePairCombo(dialog, IDC_CMB_THEME_LIGHT, config.themeA,
+                           context.lightEntries, context.lastSelLight);
+    PopulateThemePairCombo(dialog, IDC_CMB_THEME_DARK, config.themeB,
+                           context.darkEntries, context.lastSelDark);
 
     SetEditText(dialog, IDC_EDT_LAT, config.latitude);
     SetEditText(dialog, IDC_EDT_LON, config.longitude);
@@ -725,20 +1029,22 @@ void Populate(HWND dialog, const Config& config)
 
     RefreshEnabledState(dialog);
     RefreshSunInfo(dialog);
-    RefreshCurrentStateText(dialog);
+    RefreshCurrentStateText(dialog, &context);
     RefreshStartupText(dialog);
 }
 
 // Returns false and shows a message box when the form is not usable.
-bool Harvest(HWND dialog, Config& config)
+bool Harvest(HWND dialog, DialogContext& context, Config& config)
 {
     Config result = config;
 
     result.scheduleMode = SelectedMode(dialog);
     result.lightTime = GetTimeControl(dialog, IDC_DTP_LIGHT);
     result.darkTime = GetTimeControl(dialog, IDC_DTP_DARK);
-    result.changeSystem = IsDlgButtonChecked(dialog, IDC_CHK_SYSTEM) == BST_CHECKED;
-    result.changeApps = IsDlgButtonChecked(dialog, IDC_CHK_APPS) == BST_CHECKED;
+    // changeSystem / changeApps are deliberately not read back: since 1.4.0 the
+    // .theme pack carries both modes, so the two historic switches are inert.
+    // They keep whatever value the file had, which is what lets a downgrade to
+    // 1.3.x still behave the way that file says.
 
     const std::wstring latitudeText = GetEditText(dialog, IDC_EDT_LAT);
     const std::wstring longitudeText = GetEditText(dialog, IDC_EDT_LON);
@@ -778,15 +1084,67 @@ bool Harvest(HWND dialog, Config& config)
         return false;
     }
 
-    if (!result.changeSystem && !result.changeApps)
+    // ---- the two scheduled packs -----------------------------------------
+    // A schedule with only one pack would flip the machine to "nothing" every
+    // time it crossed the other boundary, so both sides are required - but only
+    // while the schedule is on. With it off the pair is reached only through
+    // "Toggle now", and refusing to save would lock the rest of the dialog for
+    // anyone who just wants the hotkey.
+    const std::wstring lightPath = ThemePathFromCombo(dialog, IDC_CMB_THEME_LIGHT, context.lightEntries);
+    const std::wstring darkPath = ThemePathFromCombo(dialog, IDC_CMB_THEME_DARK, context.darkEntries);
+
+    if (result.scheduleMode != ScheduleMode::Off && (lightPath.empty() || darkPath.empty()))
+    {
+        MessageBoxW(dialog,
+                    L10n::T(Str::MsgNoThemesBody),
+                    L10n::T(Str::MsgNoThemesTitle),
+                    MB_OK | MB_ICONWARNING);
+        SetFocus(GetDlgItem(dialog, lightPath.empty() ? IDC_CMB_THEME_LIGHT : IDC_CMB_THEME_DARK));
+        return false;
+    }
+
+    // A path that no longer resolves is worth a question rather than a refusal:
+    // it may be a theme on a drive that is simply offline right now, and the
+    // rest of the configuration is still perfectly valid.
+    std::wstring missingPath;
+    if (!lightPath.empty() && theme::DescribePath(lightPath).fileMissing)
+        missingPath = lightPath;
+    else if (!darkPath.empty() && theme::DescribePath(darkPath).fileMissing)
+        missingPath = darkPath;
+
+    if (!missingPath.empty())
     {
         const int answer = MessageBoxW(dialog,
-                                       L10n::T(Str::MsgNothingToChangeBody),
-                                       L10n::T(Str::MsgNothingToChangeTitle),
+                                       L10n::F(Str::MsgThemeMissingBody, missingPath).c_str(),
+                                       L10n::T(Str::MsgThemeMissingTitle),
+                                       MB_YESNO | MB_ICONWARNING);
+        if (answer != IDYES)
+            return false;
+    }
+
+    if (!lightPath.empty() && !darkPath.empty() &&
+        theme::SameIdentity(theme::IdentifyPath(lightPath), theme::IdentifyPath(darkPath)))
+    {
+        const int answer = MessageBoxW(dialog,
+                                       L10n::T(Str::MsgSameThemeBody),
+                                       L10n::T(Str::MsgSameThemeTitle),
                                        MB_YESNO | MB_ICONQUESTION);
         if (answer != IDYES)
             return false;
     }
+
+    // Keep the configured spelling when the selection resolves to the same
+    // pack. The catalogue de-duplicates by identity, so a theme installed twice
+    // can be listed under the copy's path while the file still names the
+    // original - saving must not rewrite a path the user never touched.
+    auto keepExisting = [](const std::wstring& existing, const std::wstring& selected) {
+        if (!existing.empty() && !selected.empty() &&
+            theme::SameIdentity(theme::IdentifyPath(existing), theme::IdentifyPath(selected)))
+            return existing;
+        return selected;
+    };
+    result.themeA = keepExisting(config.themeA, lightPath);
+    result.themeB = keepExisting(config.themeB, darkPath);
 
     if (latOk)
         result.latitude = latitudeText;
@@ -836,7 +1194,12 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
         LayoutButtonRow(dialog);
 
         if (ctx)
-            Populate(dialog, ctx->config);
+        {
+            // A theme imported while the dialog was closed has to show up on
+            // the first open, not thirty seconds later.
+            theme::InvalidateCache();
+            Populate(dialog, *ctx, ctx->config);
+        }
 
         // ---- dark mode ---------------------------------------------------
         // The three steps below are ordered, and the order is not symmetric:
@@ -896,10 +1259,19 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
             }
             return TRUE;
 
+        case IDC_CMB_THEME_LIGHT:
+        case IDC_CMB_THEME_DARK:
+            if (notification == CBN_SELCHANGE && context)
+            {
+                HandleThemePairSelection(dialog, *context, controlId == IDC_CMB_THEME_LIGHT);
+                RefreshCurrentStateText(dialog, context);
+            }
+            return TRUE;
+
         case IDC_BTN_TOGGLE:
             if (context && context->host)
                 context->host->OnToggleNow();
-            RefreshCurrentStateText(dialog);
+            RefreshCurrentStateText(dialog, context);
             return TRUE;
 
         case IDC_BTN_RESTART_EXPLORER:
@@ -918,8 +1290,9 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
 
         case IDC_BTN_RESET:
         {
-            const Config defaults;
-            Populate(dialog, defaults);
+            const Config defaults = Config{};
+            if (context)
+                Populate(dialog, *context, defaults);
 
             // The theme is previewed live, so restoring the defaults has to
             // move the preview as well - otherwise the combo would read
@@ -939,7 +1312,7 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lPa
             }
 
             Config updated = context->config;
-            if (!Harvest(dialog, updated))
+            if (!Harvest(dialog, *context, updated))
                 return TRUE;
 
             // Compare the *resolved* languages so switching "Follow Windows"

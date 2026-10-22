@@ -31,9 +31,21 @@ constexpr Entry kStrings[] = {
     { Str::DialogLabelMode, L"DialogLabelMode", L"Mode:", L"模式：" },
     { Str::DialogLabelLightStarts, L"DialogLabelLightStarts", L"Light theme starts at:", L"浅色主题开始时间：" },
     { Str::DialogLabelDarkStarts, L"DialogLabelDarkStarts", L"Dark theme starts at:", L"深色主题开始时间：" },
-    { Str::DialogGroupApplyTo, L"DialogGroupApplyTo", L"Apply to", L"生效范围" },
-    { Str::DialogCheckSystem, L"DialogCheckSystem", L"Windows system (taskbar, Start, shell)", L"Windows 系统（任务栏、开始菜单、外壳）" },
-    { Str::DialogCheckApps, L"DialogCheckApps", L"Applications", L"应用程序" },
+    { Str::DialogGroupThemes, L"DialogGroupThemes", L"Themes", L"主题对" },
+    { Str::DialogLabelLightTheme, L"DialogLabelLightTheme", L"Light:", L"浅色：" },
+    { Str::DialogLabelDarkTheme, L"DialogLabelDarkTheme", L"Dark:", L"深色：" },
+    // The last entry of both dropdowns. Short on purpose: a combo box cannot
+    // grow sideways in a 42 dlu group, and "Browse..." survives translation
+    // better than a full sentence would.
+    { Str::DialogThemeBrowse, L"DialogThemeBrowse", L"Browse...", L"浏览..." },
+    // Title of the file dialog opened by that entry.
+    { Str::DialogThemeBrowseTitle, L"DialogThemeBrowseTitle",
+      L"Choose a theme pack", L"选择主题包" },
+    // Appended to a listed theme whose file has disappeared since it was
+    // configured. The leading space is part of the string: some languages do
+    // not use one before a bracket.
+    { Str::DialogThemeMissingSuffix, L"DialogThemeMissingSuffix",
+      L" (missing)", L"（缺失）" },
     { Str::DialogGroupSun, L"DialogGroupSun", L"Sunrise / sunset", L"日出 / 日落" },
     { Str::DialogLabelLatitude, L"DialogLabelLatitude", L"Latitude:", L"纬度：" },
     { Str::DialogLabelLongitude, L"DialogLabelLongitude", L"Longitude:", L"经度：" },
@@ -104,11 +116,13 @@ constexpr Entry kStrings[] = {
     { Str::SunInfoOff, L"SunInfoOff",
       L"Off: the theme is never changed automatically.",
       L"已关闭：主题不会被自动切换。" },
-    { Str::CurrentState, L"CurrentState",
-      L"Current: system %1, apps %2\r\nNight Light %3",
-      L"当前：系统 %1，应用 %2\r\n夜灯 %3" },
-    { Str::WordLight, L"WordLight", L"light", L"浅色" },
-    { Str::WordDark, L"WordDark", L"dark", L"深色" },
+    // Two lines, matching the 26 dlu static control between the two combo
+    // boxes. The theme names are the user's own, so they can be long; the
+    // label keeps them from being mistaken for our own text.
+    { Str::CurrentThemePair, L"CurrentThemePair",
+      L"Now: %1\r\nTarget: %2",
+      L"当前：%1\r\n目标：%2" },
+    { Str::CurrentThemeUnset, L"CurrentThemeUnset", L"(not set)", L"（未设置）" },
     { Str::WordOn, L"WordOn", L"on", L"开" },
     { Str::WordOff, L"WordOff", L"off", L"关" },
 
@@ -125,15 +139,32 @@ constexpr Entry kStrings[] = {
     { Str::MsgInvalidOffsetBody, L"MsgInvalidOffsetBody",
       L"Offsets must be whole minutes between -720 and 720.",
       L"偏移必须是 -720 到 720 之间的整数分钟。" },
-    { Str::MsgNothingToChangeTitle, L"MsgNothingToChangeTitle", L"Nothing to change", L"没有切换对象" },
-    { Str::MsgNothingToChangeBody, L"MsgNothingToChangeBody",
-      L"Neither \"Windows system\" nor \"Applications\" is selected, so no theme will ever change.\n\n"
+    { Str::MsgNoThemesTitle, L"MsgNoThemesTitle", L"No themes selected", L"未选择主题" },
+    { Str::MsgNoThemesBody, L"MsgNoThemesBody",
+      L"Automatic switching needs two .theme files: one for the light side of the\n"
+      L"schedule, one for the dark side.\n\n"
+      L"Choose both, then save again.",
+      L"自动切换需要两个 .theme 主题包：一个用于计划的浅色一侧，\n"
+      L"一个用于深色一侧。\n\n"
+      L"请把两个都选好再保存。" },
+    { Str::MsgSameThemeTitle, L"MsgSameThemeTitle", L"Same theme twice", L"两个主题相同" },
+    { Str::MsgSameThemeBody, L"MsgSameThemeBody",
+      L"Light and dark are set to the same theme, so switching will have no\n"
+      L"visible effect.\n\n"
       L"Save anyway?",
-      L"「Windows 系统」和「应用程序」都没有勾选，主题将永远不会被切换。\n\n"
+      L"浅色与深色被设为同一个主题，切换不会有任何可见变化。\n\n"
       L"仍然保存吗？" },
+    { Str::MsgThemeMissingTitle, L"MsgThemeMissingTitle", L"Theme file missing", L"主题文件不存在" },
+    { Str::MsgThemeMissingBody, L"MsgThemeMissingBody",
+      L"%1 no longer exists.\n\nSave anyway?",
+      L"%1 已不存在。\n\n仍然保存吗？" },
 
     // ---- tray menu -------------------------------------------------------
     { Str::TrayToggleNow, L"TrayToggleNow", L"Toggle theme now", L"立即切换主题" },
+    // %1 is the theme's own display name, which is never translated.
+    { Str::TrayThemeLight, L"TrayThemeLight", L"Light theme: %1", L"浅色主题：%1" },
+    { Str::TrayThemeDark, L"TrayThemeDark", L"Dark theme: %1", L"深色主题：%1" },
+    { Str::TrayThemesNotSet, L"TrayThemesNotSet", L"Themes not configured", L"未配置主题" },
     { Str::TraySettings, L"TraySettings", L"Settings...", L"设置..." },
     { Str::TrayReloadConfig, L"TrayReloadConfig", L"Reload settings from disk", L"重新载入配置文件" },
     { Str::TrayOpenConfigFolder, L"TrayOpenConfigFolder", L"Open settings folder", L"打开设置目录" },
@@ -145,6 +176,7 @@ constexpr Entry kStrings[] = {
     { Str::TooltipFixed, L"TooltipFixed", L" (light %1 - %2)", L"（浅色 %1 - %2）" },
     { Str::TooltipSun, L"TooltipSun", L" (sunrise %1, sunset %2)", L"（日出 %1，日落 %2）" },
     { Str::TooltipManualOverride, L"TooltipManualOverride", L" [manual override]", L"［手动覆盖］" },
+    { Str::TooltipTheme, L"TooltipTheme", L" - %1", L" - %1" },
 
     // ---- Explorer restart -------------------------------------------------
     { Str::MsgRestartExplorerTitle, L"MsgRestartExplorerTitle",
@@ -175,28 +207,42 @@ constexpr Entry kStrings[] = {
       L"  (no arguments)  run in the notification area\n"
       L"  --settings      run and open the settings dialog\n"
       L"  --startup       run in the notification area (used by the Run key)\n"
-      L"  --toggle        flip the theme once, then exit\n"
-      L"  --light         force the light theme once, then exit\n"
-      L"  --dark          force the dark theme once, then exit\n"
+      L"  --toggle        apply the other of the two themes once, then exit\n"
+      L"  --light         apply theme A once, then exit (alias: --theme-a)\n"
+      L"  --dark          apply theme B once, then exit (alias: --theme-b)\n"
+      L"  --theme FILE    apply an arbitrary .theme file once, then exit\n"
       L"  --lang CODE     force the interface language for this run only\n"
       L"                  (auto | en-US | zh-CN)\n"
       L"  --dump-strings FILE\n"
       L"                  write every interface string to FILE, then exit\n"
+      L"  --dump-themes FILE\n"
+      L"                  write every .theme found to FILE, then exit\n"
+      L"  --theme-check FILE\n"
+      L"                  probe the Windows theme manager and report to FILE\n"
       L"  --help          show this message\n\n"
+      L"Exit codes for the one-shot modes: 0 applied, 2 nothing configured,\n"
+      L"3 theme file missing, 4 the theme could not be applied.\n\n"
       L"Settings live next to the executable in settings.json.\n"
       L"Logs are written to lightswitch.log in the same folder.",
       L"LightSwitch 独立版\n\n"
       L"  （无参数）      常驻通知区域运行\n"
       L"  --settings      运行并打开设置对话框\n"
       L"  --startup       常驻通知区域运行（供注册表 Run 项使用）\n"
-      L"  --toggle        按当前设置切换一次主题后退出\n"
-      L"  --light         强制切到浅色主题后退出\n"
-      L"  --dark          强制切到深色主题后退出\n"
+      L"  --toggle        切换到两个主题中的另一个后退出\n"
+      L"  --light         应用主题 A 后退出（别名：--theme-a）\n"
+      L"  --dark          应用主题 B 后退出（别名：--theme-b）\n"
+      L"  --theme 文件    应用任意 .theme 主题包后退出\n"
       L"  --lang 代码     仅在本次运行强制使用指定界面语言\n"
       L"                  （auto | en-US | zh-CN）\n"
       L"  --dump-strings 文件\n"
       L"                  把所有界面字符串写入该文件后退出\n"
+      L"  --dump-themes 文件\n"
+      L"                  把枚举到的所有 .theme 写入该文件后退出\n"
+      L"  --theme-check 文件\n"
+      L"                  探测 Windows 主题管理器并把结果写入该文件\n"
       L"  --help          显示本说明\n\n"
+      L"一次性模式的退出码：0 已应用，2 未配置主题，\n"
+      L"3 主题文件不存在，4 应用失败。\n\n"
       L"配置文件为 exe 同目录下的 settings.json。\n"
       L"日志写在同目录的 lightswitch.log。" },
 };

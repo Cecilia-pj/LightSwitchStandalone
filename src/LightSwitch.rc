@@ -50,11 +50,22 @@ BEGIN
     CONTROL         "", IDC_DTP_DARK, "SysDateTimePick32", DTS_TIMEFORMAT | DTS_UPDOWN | WS_TABSTOP, 268, 39, 62, 13
     LTEXT           "", IDC_STATIC_SUN, 14, 58, 314, 18             // live status line
 
-    // ---- Apply to / 生效范围 ---------------------------------------------
-    GROUPBOX        "", IDC_STATIC_GROUP_APPLY, 7, 86, 326, 42
-    CONTROL         "", IDC_CHK_SYSTEM, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 100, 170, 10
-    CONTROL         "", IDC_CHK_APPS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 114, 170, 10
-    LTEXT           "", IDC_STATIC_CURRENT, 192, 99, 141, 26        // live status line
+    // ---- Scheduled themes / 主题对 ----------------------------------------
+    // Occupies exactly the rectangle the old "Apply to" group had (86..128),
+    // so the dialog keeps its height. Two dropdowns fit because a combo box's
+    // closed height is one text line: 99..112 and 113..126, one dlu apart.
+    //
+    // The two labels are intentionally the shortest words that still read
+    // correctly in both languages ("Light:" / "浅色："): the label column is
+    // 42 dlu wide, and FitLabels() cannot rescue a control that has no room.
+    GROUPBOX        "", IDC_STATIC_GROUP_THEMES, 7, 86, 326, 42
+    LTEXT           "", IDC_STATIC_LBL_THEME_LIGHT, 14, 101, 42, 9      // Light:
+    COMBOBOX        IDC_CMB_THEME_LIGHT, 58, 99, 116, 96, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_STATIC_LBL_THEME_DARK, 14, 115, 42, 9       // Dark:
+    COMBOBOX        IDC_CMB_THEME_DARK, 58, 113, 116, 96, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    // 26 dlu = two lines, which also keeps FitLabels() from treating it as a
+    // one-line caption and widening it over the combo boxes.
+    LTEXT           "", IDC_STATIC_CURRENT, 178, 99, 148, 26            // Now / Target
 
     // ---- Sunrise / sunset / 日出日落 --------------------------------------
     GROUPBOX        "", IDC_STATIC_GROUP_SUN, 7, 133, 326, 70

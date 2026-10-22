@@ -71,7 +71,7 @@
       <!-- Dwmapi/Uxtheme are for the dark-mode module only: DWMAPI for the
            immersive dark title bar, UXTHEME for the undocumented
            SetPreferredAppMode / AllowDarkModeForWindow ordinals. -->
-      <AdditionalDependencies>Advapi32.lib;User32.lib;Gdi32.lib;Shell32.lib;Shlwapi.lib;Ole32.lib;Comctl32.lib;Kernel32.lib;Dwmapi.lib;Uxtheme.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Advapi32.lib;User32.lib;Gdi32.lib;Shell32.lib;Shlwapi.lib;Ole32.lib;Comctl32.lib;Comdlg32.lib;Kernel32.lib;Dwmapi.lib;Uxtheme.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- The manifest is embedded by src\LightSwitch.rc as RT_MANIFEST, so the
            linker must not generate one of its own. -->
       <GenerateManifest>false</GenerateManifest>

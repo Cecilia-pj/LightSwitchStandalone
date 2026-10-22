@@ -11,8 +11,10 @@
 #define IDC_DTP_LIGHT 1002
 #define IDC_DTP_DARK 1003
 #define IDC_STATIC_SUN 1004
-#define IDC_CHK_SYSTEM 1005
-#define IDC_CHK_APPS 1006
+// 1005 and 1006 were IDC_CHK_SYSTEM / IDC_CHK_APPS ("apply to Windows /
+// applications"). Retired in 1.4.0 when the two theme packs replaced the
+// boolean pair; the numbers are deliberately not reused, so an id in an old
+// screenshot or log still means what it used to.
 #define IDC_EDT_LAT 1007
 #define IDC_EDT_LON 1008
 #define IDC_EDT_SUNRISE_OFF 1009
@@ -35,12 +37,21 @@
 #define IDC_CMB_THEME 1038
 #define IDC_CHK_TRAY_CLICK 1041
 
+// ---- the two scheduled Windows themes -------------------------------------
+// Fills the rectangle the old "apply to" group used to occupy (7,86,326,42),
+// so the dialog keeps its height. See the note above the button row in the .rc.
+#define IDC_STATIC_GROUP_THEMES 1042
+#define IDC_STATIC_LBL_THEME_LIGHT 1043
+#define IDC_CMB_THEME_LIGHT 1044
+#define IDC_STATIC_LBL_THEME_DARK 1045
+#define IDC_CMB_THEME_DARK 1046
+
 // ---- translated labels / group boxes --------------------------------------
 #define IDC_STATIC_GROUP_SCHEDULE 1022
 #define IDC_STATIC_LBL_MODE 1023
 #define IDC_STATIC_LBL_LIGHT 1024
 #define IDC_STATIC_LBL_DARK 1025
-#define IDC_STATIC_GROUP_APPLY 1026
+// 1026 was IDC_STATIC_GROUP_APPLY, retired with the checkboxes it framed.
 #define IDC_STATIC_GROUP_SUN 1027
 #define IDC_STATIC_LBL_LAT 1028
 #define IDC_STATIC_LBL_LON 1029
