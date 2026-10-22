@@ -46,6 +46,13 @@
     <OutDir>$(ProjectDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)obj\$(Configuration)\</IntDir>
     <TargetName>LightSwitchStandalone</TargetName>
+    <!-- GenerateManifest is a *project* property, not just a linker setting.
+         With only the Link metadata set (see the Link block below), Microsoft.
+         CppBuild.targets still sees $(GenerateManifest)=='true', runs the
+         manifest tool and embeds a second RT_MANIFEST resource next to the one
+         src\LightSwitch.rc already carries - cvtres then fails with CVT1100
+         "duplicate MANIFEST resource". Disable it at the project level too. -->
+    <GenerateManifest>false</GenerateManifest>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
