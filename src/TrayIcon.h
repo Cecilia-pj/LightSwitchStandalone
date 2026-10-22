@@ -13,6 +13,23 @@
 namespace ls
 {
 
+// One row of the "which pack" block at the top of the context menu. A name
+// that is empty means that side of the pair is not configured; the row is then
+// greyed out rather than offered as a command that would do nothing.
+struct TrayThemeEntry
+{
+    std::wstring name;
+    bool active = false; // Windows is running this pack right now
+};
+
+// What the menu needs to know but must not read itself: the icon owns the
+// menu, App owns the configuration and the scheduler state.
+struct TrayMenuState
+{
+    TrayThemeEntry light;
+    TrayThemeEntry dark;
+};
+
 class TrayIcon
 {
 public:
@@ -28,6 +45,8 @@ public:
         CmdOpenLog = 5,
         CmdReloadConfig = 6,
         CmdExit = 7,
+        CmdThemeLight = 8,
+        CmdThemeDark = 9,
     };
 
     TrayIcon() = default;
@@ -49,7 +68,7 @@ public:
     void SetTooltip(const std::wstring& tooltip);
 
     // Shows the popup menu at the given screen point. Returns 0 when dismissed.
-    UINT ShowContextMenu(POINT screenPoint);
+    UINT ShowContextMenu(POINT screenPoint, const TrayMenuState& state);
 
     // Draws the tray icon into a freshly created HICON.
     static HICON CreateIcon();

@@ -6,6 +6,7 @@
 #include "L10n.h"
 #include "Logging.h"
 #include "StateManager.h"
+#include "ThemeCatalog.h"
 #include "WindowsTheme.h"
 #include "dark/DarkApp.h"
 #include "vendor/ThemeHelper.h"
@@ -259,6 +260,29 @@ void App::ApplyHotkeyFromConfig()
     }
 }
 
+void App::BuildTrayMenuState(TrayMenuState& state)
+{
+    const Config config = SettingsStore::Instance().Get();
+    const theme::ThemeIdentity current = m_scheduler.State().GetState().currentTheme;
+
+    // A configured path whose file has since disappeared still gets a row: the
+    // user has to be able to see that the pack they picked is gone, and the
+    // settings dialog is where that gets fixed. The name falls back to the file
+    // name, so the row reads like the one they chose.
+    auto describe = [&current](const std::wstring& path) {
+        TrayThemeEntry entry;
+        if (path.empty())
+            return entry;
+
+        entry.name = theme::DisplayNameOfPath(path);
+        entry.active = theme::SameIdentity(current, theme::IdentifyPath(path));
+        return entry;
+    };
+
+    state.light = describe(config.themeA);
+    state.dark = describe(config.themeB);
+}
+
 void App::UpdateTooltip()
 {
     const Config config = SettingsStore::Instance().Get();
@@ -280,6 +304,12 @@ void App::UpdateTooltip()
                            FormatMinutes(state.computedSunriseMinutes + config.sunriseOffset),
                            FormatMinutes(state.computedSunsetMinutes + config.sunsetOffset));
     }
+
+    // The pack that is on screen. With two arbitrary packs the schedule mode
+    // says nothing about what the machine looks like, and the names the user
+    // gave them are the only label that means anything.
+    if (!state.currentTheme.path.empty())
+        tooltip += L10n::F(Str::TooltipTheme, theme::DisplayNameOfPath(state.currentTheme.path));
 
     if (state.isManualOverride)
         tooltip += L10n::T(Str::TooltipManualOverride);
@@ -510,7 +540,10 @@ void App::HandleTrayCallback(LPARAM lParam)
         // Required so the popup behaves correctly when it is dismissed.
         SetForegroundWindow(m_window);
 
-        const UINT command = m_tray.ShowContextMenu(cursor);
+        TrayMenuState state;
+        BuildTrayMenuState(state);
+
+        const UINT command = m_tray.ShowContextMenu(cursor, state);
         if (command)
             HandleTrayCommand(command);
         break;
@@ -549,6 +582,14 @@ void App::HandleTrayCommand(UINT command)
         LOG_INFO(L"[App] Manual reload requested.");
         SettingsStore::Instance().Load();
         SetEvent(SettingsStore::Instance().ChangedEvent());
+        break;
+
+    case TrayIcon::CmdThemeLight:
+        m_scheduler.RequestApplySide(false);
+        break;
+
+    case TrayIcon::CmdThemeDark:
+        m_scheduler.RequestApplySide(true);
         break;
 
     case TrayIcon::CmdExit:

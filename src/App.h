@@ -69,6 +69,11 @@ private:
     void OpenSettingsDialog();
     void ApplyHotkeyFromConfig();
     void UpdateTooltip();
+
+    // Fills the "which pack" block of the tray menu: the two configured packs
+    // and which of them Windows is running. Runs on the UI thread, right before
+    // the popup is shown, so a pack chosen a second ago is already in there.
+    void BuildTrayMenuState(TrayMenuState& state);
     void OpenShellPath(const std::wstring& path);
     void OpenConfigFolder();
     void OpenLogFile();

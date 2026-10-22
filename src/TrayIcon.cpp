@@ -266,7 +266,7 @@ void TrayIcon::SetTooltip(const std::wstring& tooltip)
     Modify(tooltip);
 }
 
-UINT TrayIcon::ShowContextMenu(POINT screenPoint)
+UINT TrayIcon::ShowContextMenu(POINT screenPoint, const TrayMenuState& state)
 {
     HMENU menu = CreatePopupMenu();
     if (!menu)
@@ -275,6 +275,32 @@ UINT TrayIcon::ShowContextMenu(POINT screenPoint)
     // Rebuilt on every right-click, so the menu always reflects the language
     // that is active right now - no need to notify the tray when it changes.
     AppendMenuW(menu, MF_STRING, CmdToggleNow, L10n::T(Str::TrayToggleNow));
+
+    // The two packs, with a radio dot on the one that is on screen. Laid out as
+    // "which pack" rather than "toggle to X" so the labels stay stable while the
+    // schedule flips them: a moving label is harder to aim at than a moving dot.
+    //
+    // MFT_RADIOCHECK draws a bullet for MF_CHECKED instead of a tick, which is
+    // the convention for a "one of these is current" pair. The state is filled
+    // in by App because the icon has no business reading settings.json or the
+    // registry on a right-click.
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+    auto appendTheme = [&](const TrayThemeEntry& entry, UINT command, Str label) {
+        if (entry.name.empty())
+        {
+            AppendMenuW(menu, MF_STRING | MF_GRAYED, command, L10n::T(Str::TrayThemesNotSet));
+            return;
+        }
+
+        const UINT flags = MF_STRING | MFT_RADIOCHECK | (entry.active ? MF_CHECKED : MF_UNCHECKED);
+        const std::wstring text = L10n::F(label, entry.name);
+        AppendMenuW(menu, flags, command, text.c_str());
+    };
+
+    appendTheme(state.light, CmdThemeLight, Str::TrayThemeLight);
+    appendTheme(state.dark, CmdThemeDark, Str::TrayThemeDark);
+
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CmdSettings, L10n::T(Str::TraySettings));
     AppendMenuW(menu, MF_STRING, CmdReloadConfig, L10n::T(Str::TrayReloadConfig));
