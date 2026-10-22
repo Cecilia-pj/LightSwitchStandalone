@@ -9,6 +9,7 @@
 //   --dark              force the dark theme and exit
 //   --lang CODE         override the interface language for this run only
 //   --dump-strings FILE write every interface string to FILE and exit
+//   --dump-themes FILE  write every .theme found to FILE as TSV and exit
 //   --help              show this text
 #include "App.h"
 
@@ -16,6 +17,7 @@
 #include "L10n.h"
 #include "Logging.h"
 #include "Text.h"
+#include "ThemeCatalog.h"
 #include "ThemeEngine.h"
 #include "dark/DarkApp.h"
 #include "vendor/ThemeHelper.h"
@@ -24,6 +26,7 @@
 #include <shellapi.h>
 
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -61,6 +64,39 @@ enum class OneShot
     ForceLight,
     ForceDark
 };
+
+// One row per theme: name, the two mode hints, the identity and the path.
+// Written as a file rather than to stdout because this is a windowed
+// process - it has no console attached to print to.
+std::wstring BuildThemeDump()
+{
+    ls::theme::EnumerateOptions options;
+    const std::vector<ls::theme::ThemeInfo> themes = ls::theme::Enumerate(options);
+    const ls::theme::ThemeIdentity current = ls::theme::ReadCurrentIdentity();
+
+    std::wstring text;
+    text.reserve(themes.size() * 160 + 128);
+    text += L"name\tsystem\tapp\tcurrent\tmissing\tthemeId\tpath\r\n";
+    for (const ls::theme::ThemeInfo& entry : themes)
+    {
+        const bool isCurrent = ls::theme::SameIdentity(ls::theme::ThemeIdentity{ entry.themeId, entry.path }, current);
+        text += entry.displayName;
+        text += L'\t';
+        text += entry.systemMode;
+        text += L'\t';
+        text += entry.appMode;
+        text += L'\t';
+        text += isCurrent ? L"yes" : L"no";
+        text += L'\t';
+        text += entry.fileMissing ? L"yes" : L"no";
+        text += L'\t';
+        text += entry.themeId;
+        text += L'\t';
+        text += entry.path;
+        text += L"\r\n";
+    }
+    return text;
+}
 
 bool ApplyOneShot(OneShot mode)
 {
@@ -113,6 +149,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
     bool showHelp = false;
     std::wstring languageOverride;
     std::wstring dumpPath;
+    std::wstring themeDumpPath;
 
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -140,6 +177,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
             else if (_wcsicmp(argument.c_str(), L"--dump-strings") == 0 && i + 1 < argc)
             {
                 dumpPath = argv[++i];
+            }
+            else if (_wcsicmp(argument.c_str(), L"--dump-themes") == 0 && i + 1 < argc)
+            {
+                themeDumpPath = argv[++i];
             }
             else if (_wcsicmp(argument.c_str(), L"--help") == 0 || _wcsicmp(argument.c_str(), L"/?") == 0)
             {
@@ -178,6 +219,16 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int)
         if (!WriteUtf8File(dumpPath, ls::L10n::DumpAll()))
         {
             LOG_ERROR(L"[main] Could not write the string dump to " << dumpPath << L".");
+            return 3;
+        }
+        return 0;
+    }
+
+    if (!themeDumpPath.empty())
+    {
+        if (!WriteUtf8File(themeDumpPath, BuildThemeDump()))
+        {
+            LOG_ERROR(L"[main] Could not write the theme dump to " << themeDumpPath << L".");
             return 3;
         }
         return 0;
