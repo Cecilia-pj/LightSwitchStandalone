@@ -7,6 +7,46 @@ versioning follows the upstream PowerToys Light Switch module's schema — the
 on-disk `settings.json` contract is versioned separately from this file and is
 only ever extended additively.
 
+## [1.4.2] - 2026-11-08
+
+The 1.4.1 "Known issue" was wrong. `themeui.dll` had not stopped applying
+theme packs - the program was calling the one entry point that had been gutted.
+A hand-written PowerShell script using `SetCurrentTheme` switched packs on the
+same machine throughout, which is what gave the game away.
+
+### Fixed
+
+* **Theme packs apply again on `themeui.dll` 10.0.26100.8875.** `OpenTheme` has
+  become an empty implementation on this build: it returns `S_OK` in 0 ms and
+  changes nothing, which is why 1.4.0 and 1.4.1 fell back to the light/dark mode
+  and blamed the Windows side. `AddAndSelectTheme` - the entry point the Settings
+  page ends up using - still works, wallpaper and cursors included. Measured with
+  one fresh manager per case, reading `CurrentTheme` back from the registry:
+
+  | Call | Time | `CurrentTheme` |
+  | --- | --- | --- |
+  | `OpenTheme(path, pack=0)` | 0 ms | unchanged |
+  | `OpenTheme(path, pack=4)` | 0 ms | unchanged |
+  | `AddAndSelectTheme(path, 0, pack=4)` | 594 ms | applied |
+  | `SetCurrentTheme(idx, applyNow=1, pack=4)` | 485 ms | applied |
+  | `SetCurrentTheme(idx, applyNow=0, pack=4)` | 15 ms | selection moved, nothing applied |
+
+  `AddAndSelectTheme` is now the primary path. `OpenTheme` is only tried when it
+  reports a real `HRESULT` failure, so builds where the old call still works are
+  unaffected. `SetCurrentTheme` was rejected as the primary path because it needs
+  an index, and the interface exposes only display names - two packs sharing a
+  name would be indistinguishable.
+* **Calling `AddAndSelectTheme` does not pollute the theme list.** Six applies in
+  one session and three more in separate processes left the enumerated count at
+  20; the "Add" links the file to its existing entry rather than creating a
+  duplicate. Verified for packs in the user directory, `aero.theme`,
+  `dark.theme`, and applied twice in a row.
+
+### Changed
+
+* The circuit-breaker message names `AddAndSelectTheme`, and the read-back
+  failure detail records which entry point returned `S_OK` without applying.
+
 ## [1.4.1] - 2026-11-08
 
 Three of these four fixes are the same failure seen from different angles: a
@@ -68,6 +108,9 @@ nothing to do.
   Consequence: on such a build, switching falls back to the light/dark mode
   only, and the log says so. `--theme-check` still reports `com = ok`, because
   the class does load - only the apply is a no-op.
+
+  **Corrected in 1.4.2:** this diagnosis was wrong. The build does apply packs;
+  only `OpenTheme` is a no-op. `AddAndSelectTheme` works, and 1.4.2 uses it.
 
 ## [1.4.0] - 2026-10-22
 

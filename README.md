@@ -344,9 +344,19 @@ matters on a case-insensitive filesystem.
 `IThemeManager2` from `themeui.dll`, CLSID `{9324DA94-50EC-4A14-A770-E90CA03E7C8F}`
 interface `{c1e8c83e-845d-4d95-81db-e283fdffc000}`. That interface has 24 methods
 and no header in the SDK, so it is declared in `src/WindowsTheme.cpp` from a
-single X-macro list — the vtable slot of `OpenTheme` (19) is asserted at compile
-time, because a wrong slot does not fail loudly, it silently calls a different
-method with the wrong signature.
+single X-macro list — the vtable slots of `OpenTheme` (19) and
+`AddAndSelectTheme` (20) are asserted at compile time, because a wrong slot does
+not fail loudly, it silently calls a different method with the wrong signature.
+
+The interface carries three entry points that can apply a pack, and **which one
+works depends on the `themeui.dll` build**. On 10.0.26100.8875 `OpenTheme` has
+become an empty implementation: it returns `S_OK` in 0 ms and changes nothing.
+`AddAndSelectTheme` still applies the pack in about 600 ms, so that is the
+primary call; `OpenTheme` is only tried when it reports a real `HRESULT`
+failure. `SetCurrentTheme` also works but needs an index, and the interface
+exposes display names only, so two packs sharing a name would be
+indistinguishable. The full measurement table is in `CHANGELOG.md` (1.4.2) and
+at the top of `ApplyOnWorker`.
 
 The call blocks for seconds: it copies the wallpaper file, rewrites the registry
 and restarts the shell's theme providers. It runs on a **dedicated STA thread**
@@ -428,7 +438,7 @@ One process, several threads — deliberately *not* the upstream
 | Settings watcher | `Config.cpp` | `ReadDirectoryChangesW` + debounce + content comparison; signals the worker. |
 
 **The single most important rule:** nothing that applies a theme may run on the
-UI thread. Applying a pack blocks for seconds inside `OpenTheme` (wallpaper copy
+UI thread. Applying a pack blocks for seconds inside `AddAndSelectTheme` (wallpaper copy
 plus a shell theme reload), and the registry fallback ends with a
 `SendMessageTimeout(HWND_BROADCAST, ..., SMTO_ABORTIFHUNG, 5000)` broadcast that
 can block for five more. The scheduler therefore hands pack applies to the STA
@@ -693,7 +703,7 @@ name.
 | Autostart uses `HKCU\...\Run`, not a scheduled task | PowerToys uses a scheduled task because it can start elevated; a portable app cannot create one without elevation, and the path would break on relocation. | Visible in Task Manager's Startup tab. |
 | Toggle shortcut only flips *enabled* targets | Upstream's module interface did the same, but silently. | Since 1.4.0 both sides are just theme paths: if either is empty the toggle logs a warning and does nothing, and the dialog refuses to save an incomplete pair while the schedule is on. |
 | **Whole theme packs instead of two registry DWORDs** | The request that produced 1.4.0: "switch Windows themes, not light/dark". A pack is a superset, and `SystemUsesLightTheme` / `AppsUseLightTheme` end up set exactly as the pack says. | Wallpaper, cursor, sounds and accent colour now change too. The two "apply to" checkboxes are gone; `changeSystem` / `changeApps` stay in the file untouched so a downgrade still behaves. See *Themes*. |
-| **A dedicated STA thread for `IThemeManager2`** | `OpenTheme` blocks for seconds while it copies the wallpaper and restarts the shell's theme providers. Doing that on the scheduler worker would stall the minute tick; doing it on the UI thread would freeze the tray. | One apply at a time, and a newer request replaces an older one instead of queueing. The thread is started on first use and joined in `Shutdown()`. |
+| **A dedicated STA thread for `IThemeManager2`** | `AddAndSelectTheme` blocks for seconds while it copies the wallpaper and restarts the shell's theme providers. Doing that on the scheduler worker would stall the minute tick; doing it on the UI thread would freeze the tray. | One apply at a time, and a newer request replaces an older one instead of queueing. The thread is started on first use and joined in `Shutdown()`. |
 | Everything that touches the theme runs off the UI thread | PowerToys' hotkey handler ran on the hook thread; here the UI thread must stay responsive. | Rapid toggling coalesces into one pending toggle. |
 | Interface strings live in a compiled-in table, not in Win32 string resources | One source of truth per string, and no `.rc` code page to get wrong for non-ASCII. Upstream has no localisation at all. | Translating means editing `src/L10n.cpp` and rebuilding; there is no satellite DLL to drop in. See *Localisation*. |
 | The dialog template carries no text | The same single-source-of-truth reason. Each label needs a real control id so it can be set at `WM_INITDIALOG`. | `LightSwitch.rc` is geometry + ids; the English wording survives only as comments. |
@@ -709,9 +719,9 @@ name.
 
 | Risk | Mitigation in this code |
 |---|---|
-| **`IThemeManager2` is an undocumented COM interface.** There is no SDK header for it, so the vtable is described by hand — and a wrong slot does not fail loudly, it calls a different method with the wrong signature. | The declaration is generated from a single X-macro list, and the slot of `OpenTheme` (19) plus the total method count (24 + `IUnknown`) are `static_assert`ed. A successful apply is then confirmed by polling `CurrentTheme` for eight seconds, so "the call returned" is never mistaken for "the theme changed". If the class will not activate at all, the light/dark fallback runs and says so. |
-| **`themeui.dll` changed behaviour in the 2026-11-02 update and stopped applying packs.** Build 10.0.26300 with `themeui.dll` 10.0.26100.8875 returns `S_OK` from `OpenTheme` and changes nothing; `CurrentTheme` is rewritten to `Custom.theme` with a new `ThemeId` while the wallpaper, accent, cursors and sounds stay put. On some packs the call blocks for twenty seconds instead. | Nothing in this repository can fix it — the same binary applied packs correctly against the previous `themeui.dll` on 2026-10-22, and Windows' own Settings page still applies themes. The program detects it (three consecutive applies that never move `CurrentTheme`), stops calling the service for the rest of the process, and falls back to the light/dark mode, which still works. The log names the cause once. |
-| **Applying a pack is slow and not cancellable.** `OpenTheme` copies the wallpaper and restarts the shell's theme providers; a large 4K image takes noticeably longer than a solid colour. | It runs on its own STA thread with a one-slot queue, so the UI stays responsive and a second request replaces the first rather than queueing. The dialog's *Toggle now* returns immediately. |
+| **`IThemeManager2` is an undocumented COM interface.** There is no SDK header for it, so the vtable is described by hand — and a wrong slot does not fail loudly, it calls a different method with the wrong signature. | The declaration is generated from a single X-macro list, and the slots of `OpenTheme` (19) and `AddAndSelectTheme` (20) plus the total method count (24 + `IUnknown`) are `static_assert`ed. A successful apply is then confirmed by polling `CurrentTheme` for eight seconds, so "the call returned" is never mistaken for "the theme changed". If the class will not activate at all, the light/dark fallback runs and says so. |
+| **No single entry point applies a pack across `themeui.dll` builds.** On 10.0.26100.8875 `OpenTheme` is an empty implementation — `S_OK`, 0 ms, nothing changes — while `AddAndSelectTheme` still works; earlier builds worked the other way round. A program that hard-codes one of them silently does nothing on some machines. | Two entry points are declared and both are exercised: `AddAndSelectTheme` first, `OpenTheme` only when it returns a real `HRESULT` failure. Success is never inferred from the `HRESULT` — `CurrentTheme` is polled for eight seconds, and the log records which call was used. If neither moves it three times in a row, the process stops calling the service and uses the light/dark fallback, with one line explaining why. |
+| **Applying a pack is slow and not cancellable.** `AddAndSelectTheme` copies the wallpaper and restarts the shell's theme providers; a large 4K image takes noticeably longer than a solid colour. | It runs on its own STA thread with a one-slot queue, so the UI stays responsive and a second request replaces the first rather than queueing. The dialog's *Toggle now* returns immediately. |
 | **A `.theme` file is not valid UTF-16.** On the machines tested it is single-byte CP936 with no BOM; some inbox themes are UTF-16LE with one. | It is never decoded by hand: `GetPrivateProfileStringW` / `GetPrivateProfileSectionW` handle all three encodings, which is exactly what `themeui.dll` itself uses. A `[Theme] DisplayName` starting with `@` is resolved with `SHLoadIndirectString`. |
 | **Night Light blob parsing is undocumented.** `IsNightLightEnabled()` reads a `REG_BINARY` CloudStore value and requires `data[23] == 0x10 && data[24] == 0x00`. The offset can change with a Windows update. | Failure to open the key, a short value, or a read error all return `false` (treated as "Night Light off"), never an error. Only affects `FollowNightLight` mode. If it ever misbehaves, use Fixed hours or Sunset to sunrise. |
 | **`MOD_WIN` hotkeys are reserved by the OS.** MS Learn states that shortcuts involving the Windows key are reserved; `RegisterHotKey` can fail. | `HotkeyManager` tries `RegisterHotKey` first and falls back to a `WH_KEYBOARD_LL` hook that reproduces what the PowerToys Runner did. The hook callback only compares modifiers and `PostMessage`s — no blocking work. On the test machine `RegisterHotKey` with `MOD_WIN` actually succeeded, so the hook stays dormant. |

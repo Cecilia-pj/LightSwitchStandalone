@@ -7,6 +7,11 @@
 //   CLSID {9324DA94-50EC-4A14-A770-E90CA03E7C8F}
 //   IID   {c1e8c83e-845d-4d95-81db-e283fdffc000}
 //
+// The interface carries three entry points that can apply a pack, and which of
+// them works depends on the themeui.dll build: AddAndSelectTheme (the one this
+// module uses), OpenTheme (an empty function on 10.0.26100.8875) and
+// SetCurrentTheme (index based, needs the pack to be enumerated first).
+//
 // Double-clicking a .theme file does not work on current builds: the shell
 // association passes /Action:OpenTheme, which desk.cpl does not understand (it
 // only parses /Action:OpenMSTheme) and the launch silently does nothing.
@@ -74,7 +79,7 @@ int ThemeManagerThemeCount();
 // keep it on the scheduler worker (or a one-shot CLI process). timeoutMs must
 // stay below Scheduler::Stop()'s 15 s grace period.
 //
-// force=true calls OpenTheme even when CurrentTheme already points at this
+// force=true re-applies the pack even when CurrentTheme already points at this
 // file. That is what repairs a machine whose CurrentTheme and its light/dark
 // DWORDs have drifted apart: the identity says "already active", but the
 // screen disagrees, and only re-applying the pack can put the two back in

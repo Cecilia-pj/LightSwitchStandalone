@@ -102,7 +102,8 @@ ApplyReport ApplyThemeTarget(const ThemeTarget& target)
     {
         // CurrentTheme already names the pack, but the live light/dark DWORDs
         // disagree. Re-applying is the only way to put them back in step, so
-        // OpenTheme has to run even though the identity says "nothing to do".
+        // the theme manager has to be called even though the identity says
+        // "nothing to do".
         LOG_INFO(L"[ThemeEngine] \"" << target.path << L"\" is already CurrentTheme, but the live light/dark "
                  L"mode disagrees (system=" << (GetCurrentSystemTheme() ? L"Light" : L"Dark")
                  << L", apps=" << (GetCurrentAppsTheme() ? L"Light" : L"Dark")

@@ -72,32 +72,35 @@ enum : int
 
 static_assert(kSlot_Init == 3, "Init must be the first method after IUnknown.");
 static_assert(kSlot_OpenTheme == 19, "OpenTheme must sit at vtable slot 19.");
+static_assert(kSlot_AddAndSelectTheme == 20, "AddAndSelectTheme must sit at vtable slot 20.");
 static_assert(kSlot_Count == 27, "IUnknown (3) plus 24 IThemeManager2 methods.");
 
 const CLSID kClsidThemeManager2 = { 0x9324da94, 0x50ec, 0x4a14,
                                     { 0xa7, 0x70, 0xe9, 0x0c, 0xa0, 0x3e, 0x7c, 0x8f } };
 
-// InitFlags.NoFlags, PackFlags.Silent (no hourglass, no dialog, no theme sound).
+// InitFlags.NoFlags, ApplyFlags 0 (ignore none of the parts, i.e. apply the
+// whole pack), PackFlags.Silent (no hourglass, no dialog, no theme sound).
 constexpr int kInitNoFlags = 0;
+constexpr int kApplyFlagsAll = 0;
 constexpr int kPackFlagsSilent = 4;
 
-// The wallpaper swap is asynchronous; CurrentTheme follows within a few hundred
-// milliseconds on this machine. The window used to be two seconds, and a cold
-// apply that took longer than that was recorded as a failure even though
-// Windows finished the job moments later - which then triggered the registry
-// fallback and left CurrentTheme pointing at the old pack. Eight seconds is
-// still far below the caller's timeout, and the loop exits on the first match,
-// so the happy path does not pay for it.
+// The wallpaper swap is asynchronous; CurrentTheme follows within about a
+// second on this machine. The window used to be two seconds, and a cold apply
+// that took longer than that was recorded as a failure even though Windows
+// finished the job moments later - which then triggered the registry fallback
+// and left CurrentTheme pointing at the old pack. Eight seconds is still far
+// below the caller's timeout, and the loop exits on the first match, so the
+// happy path does not pay for it.
 constexpr int kReadBackAttempts = 40;
 constexpr DWORD kReadBackIntervalMs = 200;
 
-// themeui.dll is not a stable contract. The 10.0.26100.8875 build shipped on
-// 2026-11-02 answers OpenTheme with S_OK and then does nothing at all - the
-// wallpaper, cursors and CurrentTheme all stay put - and on some packs the call
-// blocks for tens of seconds instead. Both cost the caller its whole timeout,
-// and neither is our bug to fix. Three consecutive attempts is enough to
-// conclude the service has stopped delivering; after that the process uses the
-// registry path only, which still switches light/dark.
+// themeui.dll is not a stable contract. Which entry point applies a pack has
+// already changed once: on the 10.0.26100.8875 build (2026-11-02) OpenTheme
+// returns S_OK in 0 ms and changes nothing at all - left alone, that made every
+// apply look like a success to COM and like a no-op to the user. Three
+// consecutive applies that never move CurrentTheme are enough to conclude the
+// path is broken; after that the process uses the registry fallback only,
+// which still switches light/dark.
 constexpr int kApplyFailuresBeforeGivingUp = 3;
 
 struct Worker
@@ -145,10 +148,10 @@ ApplyReport NoteApplyOutcome(const ApplyReport& report)
         {
             g_worker.applyUnusable = true;
             LOG_WARN(L"[WindowsTheme] " << kApplyFailuresBeforeGivingUp
-                     << L" applies in a row did not change CurrentTheme. This build of themeui.dll ("
-                     << L"10.0.26100.8875 and later) accepts OpenTheme and then applies nothing, so the "
-                     L"pack's wallpaper, cursors and sounds cannot be set on this machine. Falling back to "
-                     L"the light/dark registry path for the rest of this process.");
+                     << L" applies in a row did not change CurrentTheme. This build of themeui.dll "
+                     L"accepts AddAndSelectTheme and applies nothing, so the pack's wallpaper, cursors "
+                     L"and sounds cannot be set on this machine. Falling back to the light/dark "
+                     L"registry path for the rest of this process.");
         }
     }
 
@@ -169,6 +172,22 @@ void CloseHandles(Worker& worker)
 }
 
 // Runs on the STA worker only.
+//
+// Which entry point applies a pack is not a stable contract either. Measured on
+// 10.0.26100.8875, one fresh manager per case, "before -> after" read back from
+// HKCU\...\Themes\CurrentTheme:
+//
+//   OpenTheme(path, pack=0)               0 ms, CurrentTheme unchanged
+//   OpenTheme(path, pack=4)               0 ms, CurrentTheme unchanged
+//   AddAndSelectTheme(path, 0, pack=4)  594 ms, applied (system+apps went dark)
+//   SetCurrentTheme(idx, applyNow=1, 4) 485 ms, applied
+//   SetCurrentTheme(idx, applyNow=0, 4)  15 ms, selection moved, nothing applied
+//
+// OpenTheme has become an empty function that returns S_OK. AddAndSelectTheme
+// is therefore the primary path. It is safe to call repeatedly: six applies in
+// one session, and three more in separate processes, left the enumerated theme
+// count at 20 - "Add" links the file to the existing entry rather than adding a
+// duplicate.
 ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path, bool force)
 {
     ApplyReport report;
@@ -200,15 +219,35 @@ ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path, boo
         return report;
     }
 
-    const HRESULT opened = manager->OpenTheme(nullptr, info.path.c_str(), kPackFlagsSilent);
-    report.hresult = opened;
-    if (FAILED(opened))
+    // AddAndSelectTheme is what the Settings page ends up calling, and it is the
+    // only entry point that still applies a pack on this themeui build. See the
+    // measurement table at the top of the file for why it is first.
+    //
+    // OpenTheme is kept purely as a fallback for builds where
+    // AddAndSelectTheme reports a genuine failure. It is deliberately NOT tried
+    // when the call reports success but nothing changes: on the builds that
+    // broke OpenTheme it returns S_OK immediately, so the second attempt would
+    // only burn the caller's timeout.
+    const wchar_t* method = L"AddAndSelectTheme";
+    HRESULT call = manager->AddAndSelectTheme(nullptr, info.path.c_str(), kApplyFlagsAll, kPackFlagsSilent);
+
+    if (FAILED(call))
+    {
+        LOG_WARN(L"[WindowsTheme] AddAndSelectTheme failed for \"" << info.path << L"\" (hr=0x" << std::hex
+                                                                  << static_cast<unsigned long>(call) << std::dec
+                                                                  << L"); trying OpenTheme.");
+        method = L"OpenTheme";
+        call = manager->OpenTheme(nullptr, info.path.c_str(), kPackFlagsSilent);
+    }
+
+    report.hresult = call;
+    if (FAILED(call))
     {
         report.status = ApplyStatus::Failed;
-        report.detail = L"OpenTheme failed";
+        report.detail = L"AddAndSelectTheme and OpenTheme both failed";
         report.observed = theme::ReadCurrentIdentity();
-        LOG_WARN(L"[WindowsTheme] OpenTheme failed for \"" << info.path << L"\" (hr=0x" << std::hex
-                                                           << static_cast<unsigned long>(opened) << std::dec << L").");
+        LOG_ERROR(L"[WindowsTheme] " << report.detail << L" for \"" << info.path << L"\" (hr=0x" << std::hex
+                                     << static_cast<unsigned long>(call) << std::dec << L").");
         return report;
     }
 
@@ -221,7 +260,7 @@ ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path, boo
         if (theme::SameIdentity(now, target))
         {
             report.status = ApplyStatus::Ok;
-            report.detail = L"applied";
+            report.detail = std::wstring(method) + L" applied";
             return report;
         }
     }
@@ -232,7 +271,7 @@ ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path, boo
     // actually running: without it the fallback path cannot tell whether the
     // pack half-applied or not at all.
     report.status = ApplyStatus::Failed;
-    report.detail = L"OpenTheme returned S_OK but CurrentTheme never matched (last seen \"" +
+    report.detail = std::wstring(method) + L" returned S_OK but CurrentTheme never matched (last seen \"" +
                     report.observed.path + L"\" " +
                     (report.observed.themeId.empty() ? L"without an id" : report.observed.themeId) + L")";
     LOG_WARN(L"[WindowsTheme] " << report.detail << L" after "
@@ -541,9 +580,9 @@ void ShutdownStaWorker()
         return;
     }
 
-    // The worker is still inside OpenTheme. Leaking it is the lesser evil: the
-    // process is on its way out, and closing the handles underneath a running
-    // thread would turn a slow exit into a crash.
+    // The worker is still inside AddAndSelectTheme. Leaking it is the lesser
+    // evil: the process is on its way out, and closing the handles underneath a
+    // running thread would turn a slow exit into a crash.
     LOG_WARN(L"[WindowsTheme] STA worker did not stop in 10 s; leaking the thread and exiting anyway.");
     g_worker.thread = nullptr;
 }
