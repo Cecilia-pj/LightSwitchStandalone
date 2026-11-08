@@ -28,17 +28,35 @@ struct ThemeTarget
     std::wstring path;             // absolute; empty when the side is unconfigured
     theme::ThemeIdentity identity; // resolved once, so the comparison is not an extra file read
 
+    // What the pack itself asks the shell to switch to. A pack that declares
+    // neither is a wallpaper-only theme and there is nothing to verify.
+    bool hasSystemMode = false;
+    bool systemModeLight = false;
+    bool hasAppMode = false;
+    bool appModeLight = false;
+
     bool Empty() const { return path.empty(); }
 };
 
-// Parses the file once and captures its identity. Cheap enough to call per
-// evaluation, and it keeps a deleted-through-the-Explorer theme from being
-// mistaken for a valid target.
+// Parses the file once and captures its identity and declared modes. Cheap
+// enough to call per evaluation, and it keeps a deleted-through-the-Explorer
+// theme from being mistaken for a valid target.
 ThemeTarget MakeTarget(const std::wstring& path);
 
-// Applies the target unless it is already the current theme. Falls back to the
-// legacy registry switch (SystemUsesLightTheme / AppsUseLightTheme) when the
-// COM path is unavailable - a policy-disabled theme service still gets a
+// True when the live SystemUsesLightTheme / AppsUseLightTheme already agree with
+// what the pack declares; true as well when the pack declares nothing.
+//
+// This is the check identity cannot make. CurrentTheme is only a bookmark to a
+// file: it can name a light pack while the two DWORDs say dark - which is
+// exactly what the registry fallback leaves behind, and what survives a reboot.
+// Deciding "already applied" on identity alone therefore makes the program sit
+// still on a desktop it never actually switched.
+bool TargetModeSatisfied(const ThemeTarget& target);
+
+// Applies the target unless it is already the current theme *and* the live
+// light/dark mode matches the pack. Falls back to the legacy registry switch
+// (SystemUsesLightTheme / AppsUseLightTheme) when the COM path is unavailable
+// or silently does nothing - a policy-disabled theme service still gets a
 // light/dark change, just without the wallpaper and cursors.
 ApplyReport ApplyThemeTarget(const ThemeTarget& target);
 

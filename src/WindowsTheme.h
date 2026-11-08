@@ -40,6 +40,14 @@ struct ApplyReport
 {
     ApplyStatus status = ApplyStatus::Failed;
     long hresult = 0;
+
+    // True when the pack itself never took and only the registry fallback ran:
+    // SystemUsesLightTheme / AppsUseLightTheme were written, the wallpaper,
+    // cursors, sounds and CurrentTheme were not. The status is Ok - the screen
+    // did change - but the caller must not record the *target* as the theme on
+    // screen, because it is not.
+    bool usedFallback = false;
+
     std::wstring requestedPath;
     theme::ThemeIdentity observed;
     std::wstring detail;
@@ -65,7 +73,13 @@ int ThemeManagerThemeCount();
 // Applies one .theme file. Blocks the calling thread for up to timeoutMs, so
 // keep it on the scheduler worker (or a one-shot CLI process). timeoutMs must
 // stay below Scheduler::Stop()'s 15 s grace period.
-ApplyReport ApplyThemeFile(const std::wstring& absolutePath, DWORD timeoutMs = 10000);
+//
+// force=true calls OpenTheme even when CurrentTheme already points at this
+// file. That is what repairs a machine whose CurrentTheme and its light/dark
+// DWORDs have drifted apart: the identity says "already active", but the
+// screen disagrees, and only re-applying the pack can put the two back in
+// step.
+ApplyReport ApplyThemeFile(const std::wstring& absolutePath, DWORD timeoutMs = 12000, bool force = false);
 
 // Stops the STA worker. Called from App::Shutdown after the scheduler stopped,
 // and from the one-shot CLI path before returning.

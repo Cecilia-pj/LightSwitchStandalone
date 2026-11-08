@@ -121,7 +121,7 @@ void DetectAndHandleExternalThemeChange(StateManager& stateManager)
                                                                       << L"\" (" << (current.themeId.empty() ? L"no id" : current.themeId)
                                                                       << L"), schedule wants \"" << targetPath
                                                                       << L"\". Entering manual override.");
-    stateManager.OnManualOverride();
+    stateManager.EnterManualOverride();
 }
 
 // Applies one named side. Deliberately runs on the worker thread.
@@ -351,7 +351,7 @@ void Scheduler::Run()
             LOG_INFO(L"[Scheduler] Manual toggle requested.");
             const ApplyReport report = FlipThemeByHand();
             if (IsSuccess(report))
-                m_state->OnManualOverride();
+                m_state->EnterManualOverride();
             else
                 LOG_WARN(L"[Scheduler] Manual toggle did nothing (" << ApplyStatusName(report.status)
                                                                    << L": " << report.detail << L").");
@@ -363,7 +363,7 @@ void Scheduler::Run()
             const bool darkSide = m_pendingSide.load() != 0;
             const ApplyReport report = ApplySide(darkSide);
             if (IsSuccess(report))
-                m_state->OnManualOverride();
+                m_state->EnterManualOverride();
             else
                 LOG_WARN(L"[Scheduler] Applying the " << (darkSide ? L"dark" : L"light") << L" theme failed ("
                                                       << ApplyStatusName(report.status) << L": " << report.detail << L").");

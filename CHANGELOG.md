@@ -7,6 +7,68 @@ versioning follows the upstream PowerToys Light Switch module's schema — the
 on-disk `settings.json` contract is versioned separately from this file and is
 only ever extended additively.
 
+## [1.4.1] - 2026-11-08
+
+Three of these four fixes are the same failure seen from different angles: a
+machine whose `CurrentTheme` named one pack while the shell was in the other
+light/dark mode stayed that way, and the program kept concluding there was
+nothing to do.
+
+### Fixed
+
+* **A desktop that stays dark while `CurrentTheme` names a light pack now heals
+  itself.** "Already applied" used to mean "the identity of `CurrentTheme`
+  matches the target pack", which is a bookmark, not a fact about the screen.
+  The registry fallback changes `SystemUsesLightTheme` / `AppsUseLightTheme` and
+  deliberately leaves `CurrentTheme` alone, so after one degraded apply the two
+  disagree for good - including across a reboot, because the DWORDs persist and
+  Windows does not re-apply the pack at logon. The check now also compares the
+  pack's `[VisualStyles] SystemMode` / `AppMode` with the live DWORDs and
+  re-applies the pack when they disagree. `ApplyThemeFile(..., force)` exists
+  for exactly that case: `OpenTheme` has to run even though the identity says
+  "nothing to do".
+* **A degraded apply is no longer mistaken for the user taking over.** The
+  state recorded the *target* as what had been applied, so one minute later the
+  external-change detector saw "current is not what we applied" and entered
+  manual override - which silenced the schedule for the rest of the evening.
+  `lastAppliedTheme` now records what Windows actually reports, and a separate
+  `lastAttemptedTheme` keeps the retry guard, because in this case "what I
+  tried" and "what is on screen" are legitimately different identities.
+* **Picking a side from the tray menu can no longer be undone a second later.**
+  `OnManualOverride()` toggled the flag instead of setting it. Choosing the side
+  the schedule did not want, while an override was already active, flipped the
+  override *off*, and the evaluation that runs immediately afterwards put the
+  scheduled side back within the same second. It is now `EnterManualOverride()`
+  and is idempotent; the override is released only at a schedule boundary, by a
+  settings change, or by a restart.
+* **A failed pack apply is now diagnosable.** `OpenTheme` failures log the
+  HRESULT, and the "returned S_OK but CurrentTheme never matched" case logs the
+  path and id it actually observed. The read-back window went from 2 s to 8 s,
+  because a cold apply can take longer than two seconds and was being recorded
+  as a failure that Windows then finished anyway.
+
+### Added
+
+* A circuit breaker for `themeui.dll`. After three consecutive applies that never
+  move `CurrentTheme`, the process stops calling it and uses the registry path
+  for the rest of its life, with one line in the log explaining why. Without it,
+  a theme service that has stopped applying packs costs every attempt its full
+  timeout - up to 12 s - for a result known in advance.
+
+### Known issue
+
+* **Windows 11 build 10.0.26300 with `themeui.dll` 10.0.26100.8875 (installed
+  2026-11-02) no longer applies theme packs through `IThemeManager2`.** On this
+  machine `OpenTheme` either returns `S_OK` and changes nothing, or blocks for
+  twenty seconds or more; `CurrentTheme` is rewritten to `Custom.theme` with a
+  fresh `ThemeId` and the wallpaper, accent colour, cursors and sounds never
+  move. The same binary applied packs correctly on 2026-10-22 against the
+  previous `themeui.dll`, so this is a Windows-side regression, not a code
+  change here. Windows itself still applies a theme chosen in Settings.
+  Consequence: on such a build, switching falls back to the light/dark mode
+  only, and the log says so. `--theme-check` still reports `com = ok`, because
+  the class does load - only the apply is a no-op.
+
 ## [1.4.0] - 2026-10-22
 
 The schedule switches **Windows themes** instead of flipping two registry

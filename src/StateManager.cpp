@@ -104,6 +104,7 @@ void StateManager::SyncInitialThemeState()
 
     m_state.currentTheme = theme::ReadCurrentIdentity();
     m_state.lastAppliedTheme = theme::ThemeIdentity{};
+    m_state.lastAttemptedTheme = theme::ThemeIdentity{};
     m_state.lastApplyTick = 0;
     m_state.isNightLightActive = IsNightLightEnabled();
 
@@ -128,6 +129,7 @@ void StateManager::OnSettingsChanged()
     // The user may have pointed a side at a different theme, so "we already
     // applied that one" no longer means anything.
     m_state.lastAppliedTheme = theme::ThemeIdentity{};
+    m_state.lastAttemptedTheme = theme::ThemeIdentity{};
     m_state.nextRetryTick = 0;
 
     EvaluateAndApplyIfNeeded();
@@ -142,16 +144,17 @@ void StateManager::OnTick()
     }
 }
 
-void StateManager::OnManualOverride()
+void StateManager::EnterManualOverride()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
-    m_state.isManualOverride = !m_state.isManualOverride;
-    LOG_INFO(L"[StateManager] Manual override is now " << (m_state.isManualOverride ? L"ON" : L"OFF"));
+    if (!m_state.isManualOverride)
+        LOG_INFO(L"[StateManager] Manual override is now ON");
 
-    // The caller has already flipped the Windows theme, regardless of which
-    // direction isManualOverride just toggled. Sync the cached state so the
-    // scheduler compares against the actual current theme on the next
+    m_state.isManualOverride = true;
+
+    // The caller has already changed the Windows theme. Sync the cached state
+    // so the scheduler compares against the actual current theme on the next
     // evaluation.
     m_state.currentTheme = theme::ReadCurrentIdentity();
 
@@ -159,6 +162,7 @@ void StateManager::OnManualOverride()
     // "already tried this one" shortcut must not swallow the next apply after
     // the override is released at the following boundary.
     m_state.lastAppliedTheme = theme::ThemeIdentity{};
+    m_state.lastAttemptedTheme = theme::ThemeIdentity{};
     m_state.nextRetryTick = 0;
 
     EvaluateAndApplyIfNeeded();
@@ -285,12 +289,19 @@ void StateManager::EvaluateAndApplyIfNeeded()
 
     const ThemeTarget target = MakeTarget(targetPath);
 
-    // Three reasons to leave the desktop alone. "Matches current" is the normal
-    // case; "already tried" covers the degraded path where the pack could not
-    // be applied and only the registry mode changed, so the identity will never
-    // match; the retry deadline covers a target that failed outright.
-    const bool matchesCurrent = theme::SameIdentity(m_state.currentTheme, target.identity);
-    const bool alreadyTried = theme::SameIdentity(m_state.lastAppliedTheme, target.identity);
+    // "Matches current" is the identity *and* the two legacy mode DWORDs.
+    // Identity alone is only a bookmark to a file: after a degraded apply it
+    // can name the light pack while the screen is dark, and treating that as
+    // done is what leaves the machine on the wrong side of the schedule for a
+    // whole morning after a reboot.
+    const bool matchesCurrent =
+        theme::SameIdentity(m_state.currentTheme, target.identity) && TargetModeSatisfied(target);
+
+    // "Already tried" guards the degraded path: the pack could not be applied,
+    // or only its mode was. Retrying every minute would cost an apply attempt
+    // per tick for nothing. It deliberately tracks the *target* rather than
+    // what ended up on screen, because in exactly this case those two differ.
+    const bool alreadyTried = theme::SameIdentity(m_state.lastAttemptedTheme, target.identity);
     if (matchesCurrent || alreadyTried)
     {
         m_state.lastTickMinutes = now;
@@ -308,12 +319,25 @@ void StateManager::EvaluateAndApplyIfNeeded()
 
     if (IsSuccess(report))
     {
-        m_state.currentTheme = (report.status == ApplyStatus::Ok) ? report.observed : target.identity;
-        m_state.lastAppliedTheme = target.identity;
+        // observed, not target: after a degraded apply the pack never became
+        // CurrentTheme, and claiming otherwise makes the external-change
+        // detector read this program's own fallback as the user taking over.
+        m_state.currentTheme = report.observed;
+        m_state.lastAppliedTheme = report.observed;
+        m_state.lastAttemptedTheme = target.identity;
         m_state.lastApplyTick = GetTickCount64();
         m_state.nextRetryTick = 0;
         m_state.lastApplyFailed = false;
         LOG_INFO(L"[StateManager] " << ApplyStatusName(report.status) << L": " << report.detail << L".");
+
+        if (report.usedFallback)
+        {
+            LOG_WARN(L"[StateManager] The desktop is now " << (shouldBeLight ? L"light" : L"dark")
+                                                           << L" mode, but CurrentTheme still points at \""
+                                                           << m_state.currentTheme.path
+                                                           << L"\". Not retrying \"" << target.path
+                                                           << L"\" again until the settings change or the program restarts.");
+        }
     }
     else
     {

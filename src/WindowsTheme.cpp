@@ -82,10 +82,23 @@ constexpr int kInitNoFlags = 0;
 constexpr int kPackFlagsSilent = 4;
 
 // The wallpaper swap is asynchronous; CurrentTheme follows within a few hundred
-// milliseconds on this machine. Two seconds is generous without being so long
-// that a broken call hides behind it.
-constexpr int kReadBackAttempts = 20;
-constexpr DWORD kReadBackIntervalMs = 100;
+// milliseconds on this machine. The window used to be two seconds, and a cold
+// apply that took longer than that was recorded as a failure even though
+// Windows finished the job moments later - which then triggered the registry
+// fallback and left CurrentTheme pointing at the old pack. Eight seconds is
+// still far below the caller's timeout, and the loop exits on the first match,
+// so the happy path does not pay for it.
+constexpr int kReadBackAttempts = 40;
+constexpr DWORD kReadBackIntervalMs = 200;
+
+// themeui.dll is not a stable contract. The 10.0.26100.8875 build shipped on
+// 2026-11-02 answers OpenTheme with S_OK and then does nothing at all - the
+// wallpaper, cursors and CurrentTheme all stay put - and on some packs the call
+// blocks for tens of seconds instead. Both cost the caller its whole timeout,
+// and neither is our bug to fix. Three consecutive attempts is enough to
+// conclude the service has stopped delivering; after that the process uses the
+// registry path only, which still switches light/dark.
+constexpr int kApplyFailuresBeforeGivingUp = 3;
 
 struct Worker
 {
@@ -97,6 +110,7 @@ struct Worker
 
     std::mutex lock;
     std::wstring pendingPath;
+    bool pendingForce = false;
     unsigned long long pendingId = 0;
     unsigned long long nextId = 0;
     unsigned long long completedId = 0;
@@ -109,11 +123,37 @@ struct Worker
     std::wstring initDetail;
 
     std::atomic<bool> attempted{ false };
+    std::atomic<int> applyFailures{ 0 };
+    std::atomic<bool> applyUnusable{ false };
 };
 
 Worker g_worker;
 std::mutex g_startLock;
 bool g_shutDown = false;
+
+// Counts consecutive applies that never moved CurrentTheme and trips the
+// process-wide "stop asking themeui" latch. See kApplyFailuresBeforeGivingUp.
+ApplyReport NoteApplyOutcome(const ApplyReport& report)
+{
+    if (report.status == ApplyStatus::Ok)
+    {
+        g_worker.applyFailures = 0;
+    }
+    else if (report.status == ApplyStatus::Failed || report.status == ApplyStatus::TimedOut)
+    {
+        if (!g_worker.applyUnusable.load() && ++g_worker.applyFailures >= kApplyFailuresBeforeGivingUp)
+        {
+            g_worker.applyUnusable = true;
+            LOG_WARN(L"[WindowsTheme] " << kApplyFailuresBeforeGivingUp
+                     << L" applies in a row did not change CurrentTheme. This build of themeui.dll ("
+                     << L"10.0.26100.8875 and later) accepts OpenTheme and then applies nothing, so the "
+                     L"pack's wallpaper, cursors and sounds cannot be set on this machine. Falling back to "
+                     L"the light/dark registry path for the rest of this process.");
+        }
+    }
+
+    return report;
+}
 
 void CloseHandles(Worker& worker)
 {
@@ -129,7 +169,7 @@ void CloseHandles(Worker& worker)
 }
 
 // Runs on the STA worker only.
-ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path)
+ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path, bool force)
 {
     ApplyReport report;
     report.requestedPath = path;
@@ -152,7 +192,7 @@ ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path)
     }
 
     const theme::ThemeIdentity target{ info.themeId, info.path };
-    if (theme::SameIdentity(theme::ReadCurrentIdentity(), target))
+    if (!force && theme::SameIdentity(theme::ReadCurrentIdentity(), target))
     {
         report.status = ApplyStatus::AlreadyCurrent;
         report.observed = target;
@@ -167,6 +207,8 @@ ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path)
         report.status = ApplyStatus::Failed;
         report.detail = L"OpenTheme failed";
         report.observed = theme::ReadCurrentIdentity();
+        LOG_WARN(L"[WindowsTheme] OpenTheme failed for \"" << info.path << L"\" (hr=0x" << std::hex
+                                                           << static_cast<unsigned long>(opened) << std::dec << L").");
         return report;
     }
 
@@ -185,9 +227,16 @@ ApplyReport ApplyOnWorker(IThemeManager2* manager, const std::wstring& path)
     }
 
     // The call succeeded but the theme never became current. In practice this
-    // is the policy-disabled case: themeui.dll answers S_OK and does nothing.
+    // is either the policy-disabled case (themeui.dll answers S_OK and does
+    // nothing) or an apply that is still in flight. Record what Windows is
+    // actually running: without it the fallback path cannot tell whether the
+    // pack half-applied or not at all.
     report.status = ApplyStatus::Failed;
-    report.detail = L"OpenTheme returned S_OK but CurrentTheme never matched";
+    report.detail = L"OpenTheme returned S_OK but CurrentTheme never matched (last seen \"" +
+                    report.observed.path + L"\" " +
+                    (report.observed.themeId.empty() ? L"without an id" : report.observed.themeId) + L")";
+    LOG_WARN(L"[WindowsTheme] " << report.detail << L" after "
+                                << (kReadBackAttempts * kReadBackIntervalMs / 1000) << L" s.");
     return report;
 }
 
@@ -264,17 +313,19 @@ DWORD WINAPI WorkerEntry(LPVOID)
             break;
 
         std::wstring path;
+        bool force = false;
         unsigned long long id = 0;
         {
             std::lock_guard<std::mutex> lock(g_worker.lock);
             if (!g_worker.hasPending)
                 continue;
             path = g_worker.pendingPath;
+            force = g_worker.pendingForce;
             id = g_worker.pendingId;
             g_worker.hasPending = false;
         }
 
-        const ApplyReport report = ApplyOnWorker(manager, path);
+        const ApplyReport report = ApplyOnWorker(manager, path, force);
 
         {
             std::lock_guard<std::mutex> lock(g_worker.lock);
@@ -399,7 +450,7 @@ int ThemeManagerThemeCount()
     return g_worker.themeCount;
 }
 
-ApplyReport ApplyThemeFile(const std::wstring& absolutePath, DWORD timeoutMs)
+ApplyReport ApplyThemeFile(const std::wstring& absolutePath, DWORD timeoutMs, bool force)
 {
     ApplyReport report;
     report.requestedPath = absolutePath;
@@ -413,12 +464,24 @@ ApplyReport ApplyThemeFile(const std::wstring& absolutePath, DWORD timeoutMs)
         return report;
     }
 
+    if (g_worker.applyUnusable.load())
+    {
+        // Already established that this theme service applies nothing. Going
+        // through the worker again would just make the caller wait out its
+        // timeout, once more, for a result that is known in advance.
+        report.status = ApplyStatus::Failed;
+        report.detail = L"themeui has stopped applying packs on this machine; using the registry fallback";
+        report.observed = theme::ReadCurrentIdentity();
+        return report;
+    }
+
     unsigned long long id = 0;
     {
         std::lock_guard<std::mutex> lock(g_worker.lock);
         id = ++g_worker.nextId;
         g_worker.pendingId = id;
         g_worker.pendingPath = absolutePath;
+        g_worker.pendingForce = force;
         g_worker.hasPending = true;
     }
     SetEvent(g_worker.jobEvent);
@@ -433,7 +496,7 @@ ApplyReport ApplyThemeFile(const std::wstring& absolutePath, DWORD timeoutMs)
             report.detail = L"the STA worker did not finish in time";
             report.observed = theme::ReadCurrentIdentity();
             LOG_WARN(L"[WindowsTheme] Timed out after " << timeoutMs << L" ms applying \"" << absolutePath << L"\".");
-            return report;
+            return NoteApplyOutcome(report);
         }
 
         const DWORD signaled = WaitForSingleObject(g_worker.doneEvent, static_cast<DWORD>(deadline - now));
@@ -442,7 +505,7 @@ ApplyReport ApplyThemeFile(const std::wstring& absolutePath, DWORD timeoutMs)
 
         std::lock_guard<std::mutex> lock(g_worker.lock);
         if (g_worker.completedId == id)
-            return g_worker.lastReport;
+            return NoteApplyOutcome(g_worker.lastReport);
         if (g_worker.completedId > id)
         {
             // A newer request overtook this one; its result is not ours to use.

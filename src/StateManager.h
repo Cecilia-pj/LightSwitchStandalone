@@ -32,12 +32,21 @@ struct LightSwitchState
     bool isManualOverride = false;
     bool isNightLightActive = false;
 
-    // The theme Windows reports, and the theme this program last put there.
-    // Both are identities (ThemeId, or the path when the file has no id), not
-    // booleans: a schedule can alternate between any two packs, and Windows
-    // rewrites CurrentTheme to Custom.theme whenever the user tweaks a colour.
+    // The theme Windows reports, the theme this program last left on screen,
+    // and the target it last tried. All three are identities (ThemeId, or the
+    // path when the file has no id), not booleans: a schedule can alternate
+    // between any two packs, and Windows rewrites CurrentTheme to Custom.theme
+    // whenever the user tweaks a colour.
+    //
+    // lastAppliedTheme and lastAttemptedTheme are deliberately separate. A
+    // degraded apply changes the light/dark DWORDs but leaves CurrentTheme on
+    // the old pack, so "what I tried" and "what the machine now shows" stop
+    // being the same identity. Recording the target as applied would make the
+    // next external-change check read our own fallback as the user taking
+    // over; recording it as attempted keeps the retry guard honest.
     theme::ThemeIdentity currentTheme;
     theme::ThemeIdentity lastAppliedTheme;
+    theme::ThemeIdentity lastAttemptedTheme;
 
     // GetTickCount64() of the last successful apply. Everything observed inside
     // the grace window afterwards is attributed to that apply.
@@ -81,8 +90,12 @@ public:
     // Called when settings.json changed (or was first loaded).
     void OnSettingsChanged();
 
-    // Called when the toggle hotkey / tray command flipped the theme by hand.
-    void OnManualOverride();
+    // Called when the toggle hotkey / tray command changed the theme by hand.
+    // Idempotent: it always means "stand down until the next boundary", never
+    // "flip the flag". Toggling it was a bug - a manual pick made while the
+    // override was already on used to release it, and the evaluation that
+    // follows immediately put the schedule's side back within the same second.
+    void EnterManualOverride();
 
     // Called when the night-light registry value changed.
     void OnNightLightChange();
